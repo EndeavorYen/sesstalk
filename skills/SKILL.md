@@ -1,13 +1,13 @@
 ---
 name: sesstalk
-description: Local session mailbox. Use when the user says /as, /send, /reply, /handoff, /receive, /who, /nudge, /peek, /claim, /bind, /list-bus, wants to pass a message or handoff note to another Codex/Claude/Cursor/Grok session, or wait for a peer message. Prefer MCP tools sesstalk_* when available; else run ~/.sesstalk/sesstalk.py.
+description: Local session mailbox. Use when the user says /as, /send, /reply, /handoff, /receive, /who, /nudge, /peek, /claim, /bind, /init, /doctor, /log, /list-bus, wants to pass a message or handoff note to another Codex/Claude/Cursor/Grok session, or wait for a peer message. Prefer MCP tools sesstalk_* when available; else run ~/.sesstalk/sesstalk.py.
 ---
 
 # sesstalk
 
 Durable mailbox at `%USERPROFILE%\.sesstalk` (or `$HOME/.sesstalk`). The target must keep a turn open on `receive`, or you must `/nudge` and get `started_turn`. `send` does not wake a prompt-idle session.
 
-Speed: if MCP tools `sesstalk_as`, `sesstalk_send`, `sesstalk_receive`, `sesstalk_peek`, `sesstalk_reply`, `sesstalk_handoff`, `sesstalk_who`, `sesstalk_nudge` exist, **call those and do not use Shell**. Otherwise run the CLI immediately. Do not read this skill first. Do not retry `py -3`.
+Speed: if MCP tools `sesstalk_as`, `sesstalk_send`, `sesstalk_receive`, `sesstalk_peek`, `sesstalk_reply`, `sesstalk_handoff`, `sesstalk_who`, `sesstalk_nudge`, `sesstalk_init`, `sesstalk_doctor`, `sesstalk_log` exist, **call those and do not use Shell**. Otherwise run the CLI immediately. Do not read this skill first. Do not retry `py -3`.
 
 Windows: `"%USERPROFILE%\.sesstalk\sesstalk.cmd"`
 Unix: `"$HOME/.sesstalk/sesstalk"`
@@ -23,7 +23,8 @@ This is how agents pass work, not a chat room.
 5. Receiver: execute `goal` / `done` / `next` / `files` / `questions`. `/reply` the sender. To update the whole group, `send --to` the rest of `audience` with the same `--thread`.
 6. The worker keeps a turn on `/receive`. `/peek` looks without consuming. `/receive --drain` takes the whole backlog without waiting.
 7. `/claim src/auth.ts` before you edit; do not touch a path `/who` lists as another peer's lease. `/release` when done.
-8. `/bind --vendor cursor` (or claude/codex). `/nudge` then returns `hook_armed` if a Stop/stop hook can continue a finishing turn. Already idle at the prompt is still idle.
+8. `/bind --vendor cursor` (or claude/codex), or `/init --name <unique> --vendor cursor` once. `/nudge` then returns `hook_armed` if a Stop/stop hook can continue a finishing turn. Already idle at the prompt is still idle.
+9. `/doctor` if install looks wrong. `/log` peeks at the queue without consuming.
 
 Do not hardcode `--from cursor`. Two Cursor chats must use different names. `/as` is per working directory; two names in the **same** folder require `--from` / `SESSTALK_NAME`.
 

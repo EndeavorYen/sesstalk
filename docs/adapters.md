@@ -35,7 +35,7 @@ sesstalk bind --name codex --vendor codex --thread-id thr_... --app-server tcp:/
 sesstalk nudge --name codex --vendor codex
 ```
 
-No endpoint: `idle_no_adapter` (will not spawn). Connect/RPC fail: `error`. Success: `started_turn` / `adapter: codex_app_server`. Layer 1 talks newline JSON-RPC over `tcp://` **and** JSON-RPC over `ws://` (Codex `--listen ws://127.0.0.1:PORT`). Failures stay `error` / `idle_no_adapter`. Do not start `codex app-server` from nudge.
+No endpoint: `idle_no_adapter` (will not spawn). Connect/RPC fail: `error`. Success: `started_turn` / `adapter: codex_app_server`. Layer 1 talks newline JSON-RPC over `tcp://`, `unix://` (not native Windows), **and** JSON-RPC over `ws://` (Codex `--listen ws://127.0.0.1:PORT`). Failures stay `error` / `idle_no_adapter`. Do not start `codex app-server` from nudge.
 
 Portable adapter: `~/.codex/hooks.json` Stop hook → `sesstalk hook --vendor codex` (same JSON as Claude).
 

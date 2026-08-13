@@ -67,3 +67,28 @@ class InstallTests(unittest.TestCase):
             self.assertFalse(payload["writes_agent_bus"])
             self.assertFalse((Path(tmp) / ".agent-bus").exists())
             self.assertTrue((Path(tmp) / ".sesstalk" / "sesstalk.py").is_file())
+
+    def test_install_copies_new_slash_commands_when_cursor_home_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["HOME"] = tmp
+            env["USERPROFILE"] = tmp
+            home = Path(tmp)
+            if os.name == "nt" and len(str(home)) >= 2 and str(home)[1] == ":":
+                env["HOMEDRIVE"] = str(home)[:2]
+                env["HOMEPATH"] = str(home)[2:] or "\\"
+            env["SESSTALK_HOME"] = str(home / ".sesstalk")
+            (home / ".cursor").mkdir()
+            result = subprocess.run(
+                [sys.executable, "-S", str(ROOT / "install.py"), "--no-mcp", "--no-hooks"],
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            commands = home / ".cursor" / "commands"
+            for name in ("doctor.md", "init.md", "log.md", "schema.md"):
+                self.assertTrue((commands / name).is_file(), name)
+            skill = (home / ".cursor" / "skills" / "sesstalk" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("/doctor", skill)

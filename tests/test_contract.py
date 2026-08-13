@@ -53,6 +53,12 @@ class ContractTests(unittest.TestCase):
             self.assertTrue(msg["provenance"]["untrusted"])
             self.assertEqual(msg["provenance"]["depth"], 0)
 
+    def test_schema_command_matches_required_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = payload(run_cli(Path(tmp), "schema"))["schema"]
+        self.assertEqual(sorted(schema["required"]), sorted(REQUIRED))
+        self.assertEqual(schema["properties"]["provenance"]["properties"]["untrusted"]["const"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

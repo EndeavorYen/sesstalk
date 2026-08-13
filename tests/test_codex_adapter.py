@@ -240,3 +240,72 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("Popen(", text)
         self.assertNotIn('["codex"', text)
         self.assertNotIn("['codex'", text)
+
+    @unittest.skipIf(sys.platform == "win32", "unix:// Codex listen is not native Windows")
+    def test_fake_unix_app_server_turn_start(self) -> None:
+        sock_path = str(Path(self.temp.name) / "codex.sock")
+        got: list[dict] = []
+        ready = threading.Event()
+
+        def serve() -> None:
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                server.bind(sock_path)
+                server.listen(1)
+                ready.set()
+                conn, _addr = server.accept()
+                with conn:
+                    conn.settimeout(2)
+                    buf = b""
+                    while b"\n" not in buf:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        buf += chunk
+                    if buf.strip():
+                        got.append(json.loads(buf.split(b"\n", 1)[0].decode("utf-8")))
+                    conn.sendall(
+                        (json.dumps({"id": 1, "result": {"turn": {"id": "turn_unix"}}}) + "\n").encode(
+                            "utf-8"
+                        )
+                    )
+            finally:
+                server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.assertTrue(ready.wait(2))
+        run_cli(
+            self.home,
+            "bind",
+            "--name",
+            "codex",
+            "--vendor",
+            "codex",
+            "--thread-id",
+            "thr_unix",
+            "--app-server",
+            f"unix://{sock_path}",
+        )
+        result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
+        thread.join(timeout=3)
+        self.assertEqual(result["attention"], "started_turn")
+        self.assertEqual(got[0]["params"]["threadId"], "thr_unix")
+
+    @unittest.skipUnless(sys.platform == "win32", "native Windows unix:// blocker")
+    def test_windows_unix_app_server_is_honest_blocker(self) -> None:
+        run_cli(
+            self.home,
+            "bind",
+            "--name",
+            "codex",
+            "--vendor",
+            "codex",
+            "--thread-id",
+            "thr_unix",
+            "--app-server",
+            "unix:///tmp/codex.sock",
+        )
+        result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
+        self.assertEqual(result["attention"], "idle_no_adapter")
+        self.assertIn("Windows", result["blocker"])

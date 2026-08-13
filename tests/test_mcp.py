@@ -61,6 +61,11 @@ class McpTests(unittest.TestCase):
         self.assertIn("sesstalk_send", names)
         self.assertIn("sesstalk_nudge", names)
         self.assertIn("sesstalk_peek", names)
+        self.assertIn("sesstalk_doctor", names)
+        self.assertIn("sesstalk_log", names)
+        self.assertIn("sesstalk_init", names)
+        self.assertIn("sesstalk_schema", names)
+        self.assertEqual(replies[0]["result"]["serverInfo"]["version"], "0.5.0")
 
     def test_send_tool_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,4 +117,25 @@ class McpTests(unittest.TestCase):
             self.assertEqual(len(inner["messages"]), 2)
             peeked = payload(run_cli(home, "peek", "--name", "c"))
             self.assertEqual(peeked["next"]["thread"], "t9")
+
+    def test_init_tool_binds_vendor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            replies = mcp_exchange(
+                [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "sesstalk_init",
+                            "arguments": {"name": "peer", "vendor": "cursor"},
+                        },
+                    }
+                ],
+                home=home,
+            )
+            inner = json.loads(replies[0]["result"]["content"][0]["text"])
+            self.assertEqual(inner["status"], "ready")
+            self.assertEqual(inner["bind"]["vendor"], "cursor")
 

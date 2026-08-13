@@ -97,6 +97,37 @@ class DemoTests(unittest.TestCase):
         self.assertIn("docs/envelope.svg", readme)
         self.assertIn("docs/attention.svg", readme)
         self.assertIn("docs/demo.svg", readme)
+        self.assertIn("docs/flow.svg", readme)
+
+    def test_readme_art_is_well_formed_modern_xml(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        root = Path(__file__).resolve().parents[1]
+        for name in ("architecture.svg", "envelope.svg", "attention.svg", "flow.svg", "demo.svg"):
+            path = root / "docs" / name
+            blob = path.read_text(encoding="utf-8")
+            ET.fromstring(blob)
+            self.assertNotIn("Georgia", blob)
+            self.assertNotIn("Times", blob)
+            self.assertNotIn("kraft", blob.lower())
+            self.assertNotIn("postage", blob.lower())
+            self.assertNotIn('font-family="ui-sans-serif, "', blob)
+
+    def test_checked_in_art_matches_renderer(self) -> None:
+        import subprocess
+
+        root = Path(__file__).resolve().parents[1]
+        out = Path(self.temp.name) / "art"
+        subprocess.run(
+            [sys.executable, "-S", str(root / "scripts" / "render_readme_art.py"), "--out", str(out)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for name in ("architecture.svg", "envelope.svg", "attention.svg", "flow.svg"):
+            got = (out / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+            want = (root / "docs" / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+            self.assertEqual(got, want, name)
 
     def test_render_readme_art_regenerates(self) -> None:
         root = Path(__file__).resolve().parents[1]

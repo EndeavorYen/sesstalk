@@ -8,10 +8,11 @@ Not Slack for agents. Not another 20-tool MCP chat room. A JSONL inbox plus per-
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-![Three windows on one machine: cursor-a sends a work envelope into ~/.sesstalk JSONL, claude receives or sesstalk reports idle](docs/architecture.svg)
+![cursor-a hands a JSONL work object into ~/.sesstalk; claude receives or sesstalk reports idle](docs/architecture.svg)
 
 ```text
 python install.py --verify
+sesstalk doctor
 sesstalk demo
 ```
 
@@ -32,7 +33,7 @@ Coding agents do not share a vendor. You already have Cursor in one window and C
 
 sesstalk is the missing **work envelope**. Delivery is a local JSONL mailbox. Attention is a separate adapter. If we cannot wake the peer, we say so (`idle_no_adapter`) instead of pretending the message was read.
 
-![Work envelope: goal, next, files, thread, audience, untrusted provenance](docs/envelope.svg)
+![Work envelope fields: goal, next, files, thread, audience, untrusted provenance](docs/envelope.svg)
 
 If that picture does not match a feature idea, the feature does not belong here. Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -109,7 +110,9 @@ Tape: [`docs/demo.cast`](docs/demo.cast) · [`docs/demo.txt`](docs/demo.txt)
 
 `send` only queues. `nudge` is a different verb. Cursor cannot wake a peer already sitting at the prompt; a Stop hook can only continue a **finishing** turn.
 
-![Five honest attention stamps: listening, started_turn, hook_armed, idle_no_adapter, error](docs/attention.svg)
+![send queues, receive listens, nudge may wake](docs/flow.svg)
+
+![Honest attention states: listening, started_turn, hook_armed, idle_no_adapter, error](docs/attention.svg)
 
 | `attention` | Meaning |
 |---|---|
@@ -131,7 +134,7 @@ Same envelope on every host. What differs is **how you call it** and **whether w
 | CLI (`sesstalk` / `sesstalk.cmd`) | yes | yes | yes | yes |
 | MCP stdio (fast path) | `~/.cursor/mcp.json` | `~/.claude.json` | `~/.codex/config.toml` | use CLI |
 | Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
-| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://` or `ws://`); never spawn a second agent | no documented API |
+| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://`, `ws://`, or `unix://` on Unix); never spawn a second agent | no documented API |
 | Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
 
 ## Not this
@@ -153,6 +156,8 @@ python install.py --verify
 ```
 
 Copies the CLI to `~/.sesstalk`, installs skills and slash commands when `~/.cursor`, `~/.claude`, `~/.codex`, or `~/.grok` exist, registers MCP + Stop/stop hooks, and smokes send/receive. `--no-mcp` / `--no-hooks` skip those. Never writes deprecated `~/.agent-bus`.
+
+Then `sesstalk doctor` (read-only) and `sesstalk init --name cursor-a --vendor cursor` (`/as` + `/bind`). `sesstalk log --name <inbox>` shows queue lines without consuming them. `sesstalk schema` prints the work envelope JSON Schema.
 
 Override the mailbox with `SESSTALK_HOME`.
 
@@ -179,7 +184,11 @@ If MCP tools are available, use `sesstalk_send` / `sesstalk_receive` / … inste
 | `/receive [name]` | Block until unread mail (`--drain` takes the backlog) |
 | `/peek [name]` | Look without consuming |
 | `/reply <text>` | Reply to last inbound `from` |
-| `/who` | `listening` / `idle` / `unknown` + unread + leases |
+| `/who` | `listening` / `idle` / `unknown` + unread + leases + cwd identities |
+| `/init <name> --vendor …` | `/as` + `/bind` |
+| `/doctor` | Install / identity diagnosis |
+| `/log [name]` | Recent queue lines (does not consume) |
+| `/schema` | Work envelope JSON Schema |
 | `/nudge <peer> --vendor …` | Best-effort wake |
 | `/bind <name> --vendor …` | Remember vendor for `hook_armed` |
 | `/claim <path>` | Lease a file |
@@ -206,6 +215,8 @@ Unix:
 ```
 
 `sesstalk demo` / `sesstalk demo --json` replays the README story in a throwaway mailbox (does not write `~/.sesstalk`).
+
+`sesstalk version` / `sesstalk schema` / `sesstalk doctor` / `sesstalk log` are diagnostics. They do not consume mail.
 
 `receive` drains **unread** mail by default. `--live` waits only for mail sent after it starts. `--timeout 0` waits forever. Exit `2` is timeout. Names: `[a-z0-9][a-z0-9_-]{0,63}`.
 

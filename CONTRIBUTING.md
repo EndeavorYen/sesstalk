@@ -30,6 +30,8 @@ Copy this into the pull request (the template asks the same questions):
 python -m unittest discover -s tests -v
 python install.py --verify
 sesstalk demo
+python scripts/render_readme_art.py
+python scripts/record_demo.py
 ```
 
 Windows: `"%USERPROFILE%\.sesstalk\sesstalk.cmd" demo`

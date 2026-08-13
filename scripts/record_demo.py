@@ -41,14 +41,14 @@ def write_cast(text: str, path: Path, width: int = 88, height: int = 32) -> None
 def line_fill(row: str) -> str:
     stripped = row.strip()
     if stripped.startswith("sesstalk") or stripped.startswith("$"):
-        return "#E6C07B"
+        return "#C6FF4A"
     if stripped.startswith("Next:"):
-        return "#E07A5F"
+        return "#FB7185"
     if stripped.startswith('"') or stripped in {"{", "}", "[", "]", "},", "],"}:
-        return "#A3BE8C"
+        return "#A1A1AA"
     if stripped.startswith("--") or " --" in row:
-        return "#81A1C1"
-    return "#D8D0C4"
+        return "#E4E4E7"
+    return "#A1A1AA"
 
 
 def write_svg(text: str, path: Path) -> None:
@@ -64,7 +64,7 @@ def write_svg(text: str, path: Path) -> None:
         fill = line_fill(row)
         parts.append(
             f'<text x="20" y="{y}" fill="{fill}" '
-            f'font-family="ui-monospace, SFMono-Regular, Consolas, monospace" '
+            f'font-family="ui-monospace, Cascadia Mono, SF Mono, Consolas, monospace" '
             f'font-size="13">{esc}</text>'
         )
         y += line_h
@@ -72,16 +72,15 @@ def write_svg(text: str, path: Path) -> None:
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-label="sesstalk demo terminal">\n'
-        '  <rect width="100%" height="100%" rx="8" fill="#1c1917"/>\n'
-        '  <circle cx="22" cy="18" r="5" fill="#c45c4a"/>\n'
-        '  <circle cx="40" cy="18" r="5" fill="#c4a35a"/>\n'
-        '  <circle cx="58" cy="18" r="5" fill="#6a8f71"/>\n'
-        '  <text x="80" y="22" fill="#a8a29a" font-family="ui-monospace, Consolas, monospace" '
-        'font-size="12">sesstalk demo</text>\n'
+        '  <rect width="100%" height="100%" rx="16" fill="#09090B"/>\n'
+        '  <rect x="0" y="0" width="100%" height="3" fill="#C6FF4A"/>\n'
+        '  <text x="20" y="22" fill="#A1A1AA" '
+        'font-family="ui-sans-serif, Segoe UI, Helvetica Neue, Arial, sans-serif" '
+        'font-size="11" letter-spacing="0.28em">SESSTALK DEMO</text>\n'
         f'  {"".join(parts)}\n'
         "</svg>\n"
     )
-    path.write_text(svg, encoding="utf-8")
+    path.write_text(svg, encoding="utf-8", newline="\n")
 
 
 def main() -> None:
@@ -91,10 +90,12 @@ def main() -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     text = run_demo()
-    (out / "demo.txt").write_text(text, encoding="utf-8")
+    (out / "demo.txt").write_text(text, encoding="utf-8", newline="\n")
     write_svg(text, out / "demo.svg")
     write_cast(text, out / "demo.cast")
     print(f"wrote {out / 'demo.txt'}", flush=True)
+    print(f"wrote {out / 'demo.svg'}", flush=True)
+    print(f"wrote {out / 'demo.cast'}", flush=True)
 
 
 if __name__ == "__main__":

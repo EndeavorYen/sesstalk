@@ -14,7 +14,7 @@ A stranger on one machine can:
 
 Not Slack. Not a cloud bus. Not 20 MCP chat tools.
 
-## Done (v0.1–v0.4)
+## Done (v0.1–v0.5)
 
 | Slice | What shipped |
 |---|---|
@@ -27,34 +27,25 @@ Not Slack. Not a cloud bus. Not 20 MCP chat tools.
 | Collab | Fan-out `--to a --to b`, `thread`, `peek`, `drain` |
 | Leases | `claim` / `release` so two agents do not edit the same path |
 | Attention | Honest nudge; Stop/stop hooks continue a **finishing** turn |
-| README | Interop matrix, demo, explicit **Not this** |
+| Demo | `sesstalk demo` + recorded terminal SVG (no LLM) |
+| Identity | `/as` keyed by cwd; two chats in one folder must pass `--from` |
+| Cursor hook | Stop hook maps cwd → unique bind |
+| Claude | Fake AF_UNIX `SendMessage`; native Windows is `idle_no_adapter` |
+| Codex | `bind --thread-id` + `--app-server` `tcp://` / `ws://` / `unix://` (not native Windows); never spawn |
+| Ops | `version` `schema` `doctor` `init` `log` |
+| README | Regenerable zinc+lime SVGs; interop table; explicit **Not this** |
 
 ## Milestones
 
-### v0.5 Prove the demo
-
-Strangers must *see* the value without two humans and an LLM.
-
-- [#13](https://github.com/EndeavorYen/sesstalk/issues/13) `sesstalk demo` — done
-- [#14](https://github.com/EndeavorYen/sesstalk/issues/14) Recorded terminal demo
-- [#15](https://github.com/EndeavorYen/sesstalk/issues/15) CONTRIBUTING + north-star checklist — done
-
-### v0.6 Attention where the host allows
-
-Do not invent wake APIs. Implement or document per vendor.
-
-- [#16](https://github.com/EndeavorYen/sesstalk/issues/16) Hook maps cwd → bound inbox — done
-- [#17](https://github.com/EndeavorYen/sesstalk/issues/17) Claude UDS wake (fake socket, skip Windows)
-- [#18](https://github.com/EndeavorYen/sesstalk/issues/18) Codex `bind --thread-id` / honest fail
-
 ### v1.0 Agents will use it
 
-- [#19](https://github.com/EndeavorYen/sesstalk/issues/19) Two Cursor chats must not clobber `--from`
-- [#12](https://github.com/EndeavorYen/sesstalk/issues/12) Epic: close when the milestones above are done and the README interop table is still true
+- [#12](https://github.com/EndeavorYen/sesstalk/issues/12) Epic: close when the README interop table is still true **and** a human records Layer 4 live pairing
+- [#22](https://github.com/EndeavorYen/sesstalk/issues/22) Layer 4: one real Cursor + Claude or Codex pairing on the epic (no LLM in CI)
 
-Follow-ups after this loop (do not grow a chat product):
+Follow-ups that stay in scope:
 
-- Layer 4: one real Cursor + Claude or Codex pairing recorded on the epic (no LLM in CI)
+- Real Codex `app-server --listen unix://` is WebSocket-over-UDS; Layer 1 `unix://` today is newline JSON-RPC for tests. Document or implement WS-over-UDS without spawning.
+- Grok: keep `/receive`; no fake wake API
 
 ## Anti-goals (reject PRs)
 
@@ -63,6 +54,7 @@ Follow-ups after this loop (do not grow a chat product):
 - Pretending Cursor can wake a peer already sitting at the prompt
 - Unbounded agent ping-pong (depth cap stays)
 - Default-CI LLM calls
+- A 20th chat MCP tool (doctor/log/schema are diagnostics)
 
 ## How we decide
 

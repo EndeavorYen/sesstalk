@@ -13,13 +13,12 @@ python install.py --verify
 Open three chats (mix vendors if you can). Unique names:
 
 ```text
-/as cursor-a
-/bind cursor-a --vendor cursor
-/as claude
-/bind claude --vendor claude
-/as codex
-/bind codex --vendor codex
+/init cursor-a --vendor cursor
+/init claude --vendor claude
+/init codex --vendor codex
 ```
+
+(/init is /as + /bind. Unique names still required.)
 
 Keep at least one worker on `/receive` **or** finish a turn so the Stop/stop hook can continue.
 

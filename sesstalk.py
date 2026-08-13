@@ -18,6 +18,59 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MAX_RELAY_DEPTH = 2
 LISTENER_TTL_S = 3.0
 VENDORS = ("cursor", "claude", "codex", "grok")
+VERSION = "0.5.0"
+ENVELOPE_KEYS = (
+    "id",
+    "ts",
+    "from",
+    "to",
+    "reply_to",
+    "text",
+    "handoff",
+    "goal",
+    "done",
+    "next",
+    "questions",
+    "paths",
+    "files",
+    "meta",
+    "provenance",
+    "thread",
+    "audience",
+)
+ENVELOPE_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "sesstalk work envelope",
+    "type": "object",
+    "required": list(ENVELOPE_KEYS),
+    "properties": {
+        "id": {"type": "string"},
+        "ts": {"type": "string"},
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "reply_to": {"type": ["string", "null"]},
+        "thread": {"type": ["string", "null"]},
+        "audience": {"type": "array", "items": {"type": "string"}},
+        "text": {"type": "string"},
+        "handoff": {"type": ["string", "null"]},
+        "goal": {"type": ["string", "null"]},
+        "done": {"type": ["string", "null"]},
+        "next": {"type": ["string", "null"]},
+        "questions": {"type": "array", "items": {"type": "string"}},
+        "paths": {"type": "array", "items": {"type": "string"}},
+        "files": {"type": "array", "items": {"type": "string"}},
+        "meta": {"type": "object"},
+        "provenance": {
+            "type": "object",
+            "required": ["peer", "untrusted", "depth"],
+            "properties": {
+                "peer": {"type": "string"},
+                "untrusted": {"type": "boolean", "const": True},
+                "depth": {"type": "integer", "minimum": 0, "maximum": 1},
+            },
+        },
+    },
+}
 
 
 def bus_home() -> Path:
@@ -1186,6 +1239,35 @@ def jsonrpc_over_tcp(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def jsonrpc_over_unix(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    import socket as sockmod
+
+    raw = endpoint.strip()
+    if raw.lower().startswith("unix://"):
+        raw = raw[7:]
+    if sys.platform == "win32":
+        raise OSError("unix:// app-server is not native Windows")
+    client = sockmod.socket(sockmod.AF_UNIX, sockmod.SOCK_STREAM)
+    try:
+        client.settimeout(2)
+        client.connect(raw)
+        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        buf = b""
+        while b"\n" not in buf:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        client.close()
+    if not buf.strip():
+        raise OSError("empty app-server reply")
+    data = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
+    if not isinstance(data, dict):
+        raise OSError("app-server reply was not an object")
+    return data
+
+
 def _ws_client_frame(text: str) -> bytes:
     payload = text.encode("utf-8")
     mask = os.urandom(4)
@@ -1314,7 +1396,8 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
             "status": "queued",
             "attention": "idle_no_adapter",
             "blocker": (
-                "Codex turn/start needs a live app-server (--app-server tcp://127.0.0.1:PORT) "
+                "Codex turn/start needs a live app-server "
+                "(--app-server tcp://127.0.0.1:PORT | ws://... | unix://PATH) "
                 "plus --thread-id; sesstalk will not spawn a second Codex agent"
             ),
             "adapter": "codex_app_server",
@@ -1328,7 +1411,18 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
         },
     }
     try:
-        if endpoint.lower().startswith("ws://"):
+        low = endpoint.lower()
+        if low.startswith("unix://"):
+            if sys.platform == "win32":
+                return {
+                    "ok": True,
+                    "status": "queued",
+                    "attention": "idle_no_adapter",
+                    "blocker": "unix:// Codex app-server is not native Windows; use ws:// or tcp://, or WSL",
+                    "adapter": "codex_app_server",
+                }
+            reply = jsonrpc_over_unix(endpoint, request)
+        elif low.startswith("ws://"):
             reply = jsonrpc_over_ws(endpoint, request)
         else:
             reply = jsonrpc_over_tcp(endpoint, request)
@@ -1532,6 +1626,184 @@ def cmd_demo(args: argparse.Namespace) -> None:
                 os.environ["SESSTALK_HOME"] = previous
 
 
+def cmd_version(_args: argparse.Namespace) -> None:
+    print(
+        json.dumps({"ok": True, "status": "version", "version": VERSION, "python": sys.executable}),
+        flush=True,
+    )
+
+
+def cmd_schema(_args: argparse.Namespace) -> None:
+    print(
+        json.dumps({"ok": True, "status": "schema", "version": VERSION, "schema": ENVELOPE_SCHEMA}),
+        flush=True,
+    )
+
+
+def _config_mentions_sesstalk(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        return "sesstalk" in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def mailbox_health(home: Path, name: str) -> dict[str, Any]:
+    qpath = queue_path(home, name)
+    lines = 0
+    corrupt = 0
+    last_thread = None
+    if qpath.exists():
+        with qpath.open("r", encoding="utf-8") as handle:
+            for raw in handle:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    item = json.loads(raw)
+                except json.JSONDecodeError:
+                    corrupt += 1
+                    continue
+                lines += 1
+                if isinstance(item, dict) and item.get("thread"):
+                    last_thread = item.get("thread")
+    lpath = listener_path(home, name)
+    state = "unknown"
+    if lpath.exists():
+        try:
+            data = json.loads(lpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        until = float(data.get("listening_until") or 0)
+        pid = int(data.get("pid") or 0)
+        state = "listening" if until > time.time() and pid_alive(pid) else "idle"
+    elif (
+        qpath.exists()
+        or cursor_path(home, name).exists()
+        or name in (load_sessions(home).get("sessions") or {})
+    ):
+        state = "idle"
+    return {
+        "unread": unread_count(home, name),
+        "state": state,
+        "lines": lines,
+        "corrupt": corrupt,
+        "last_thread": last_thread,
+    }
+
+
+def cmd_doctor(_args: argparse.Namespace) -> None:
+    home = bus_home()
+    ensure_dirs(home)
+    user = Path.home()
+    names = cwd_identity_names(home)
+    peers = collect_names(home)
+    payload: dict[str, Any] = {
+        "ok": True,
+        "status": "doctor",
+        "version": VERSION,
+        "python": sys.executable,
+        "home": str(home),
+        "cwd": cwd_key(),
+        "identities": names,
+        "binds": sorted(load_binds(home).keys()),
+        "peers": peers,
+        "mailboxes": {name: mailbox_health(home, name) for name in peers},
+        "mcp": {
+            "cursor": _config_mentions_sesstalk(user / ".cursor" / "mcp.json"),
+            "claude": _config_mentions_sesstalk(user / ".claude.json"),
+            "codex": _config_mentions_sesstalk(user / ".codex" / "config.toml"),
+        },
+        "hooks": {
+            "cursor": _config_mentions_sesstalk(user / ".cursor" / "hooks.json"),
+            "claude": _config_mentions_sesstalk(user / ".claude" / "settings.json"),
+            "codex": _config_mentions_sesstalk(user / ".codex" / "hooks.json"),
+        },
+    }
+    if len(names) > 1:
+        payload["warning"] = "this directory has multiple /as names; pass --from"
+    print(json.dumps(payload), flush=True)
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    home = bus_home()
+    ensure_dirs(home)
+    name = normalize_name(args.name)
+    names = set_identity(home, name)
+    vendor = (args.vendor or "unknown").strip().lower()
+    if vendor != "unknown" and vendor not in VENDORS:
+        die(f"vendor must be one of {', '.join(VENDORS)}")
+    binds = load_binds(home)
+    prev = binds.get(name) if isinstance(binds.get(name), dict) else {}
+    bind = {
+        "name": name,
+        "vendor": vendor,
+        "hook": True,
+        "socket": args.socket if args.socket is not None else prev.get("socket"),
+        "thread_id": getattr(args, "thread_id", None) or prev.get("thread_id"),
+        "app_server": getattr(args, "app_server", None) or prev.get("app_server"),
+        "cwd": os.getcwd(),
+        "updated_at": now_iso(),
+    }
+    binds[name] = bind
+    save_json_file(binds_path(home), binds)
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": "ready",
+        "name": name,
+        "cwd": cwd_key(),
+        "bind": bind,
+    }
+    if len(names) > 1:
+        result["warning"] = "this directory has multiple /as names; pass --from"
+        result["names"] = names
+    print(json.dumps(result), flush=True)
+
+
+def read_queue_messages(home: Path, name: str) -> list[dict[str, Any]]:
+    qpath = queue_path(home, name)
+    if not qpath.exists():
+        return []
+    messages: list[dict[str, Any]] = []
+    with qpath.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                messages.append(item)
+    return messages
+
+
+def cmd_log(args: argparse.Namespace) -> None:
+    home = bus_home()
+    ensure_dirs(home)
+    name = identity_name(home, args.name)
+    if not name:
+        die("pass --name")
+    limit = max(1, int(args.limit or 20))
+    messages = read_queue_messages(home, name)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "status": "log",
+                "name": name,
+                "count": min(limit, len(messages)),
+                "total": len(messages),
+                "unread": unread_count(home, name),
+                "messages": messages[-limit:],
+            }
+        ),
+        flush=True,
+    )
+
+
 def add_work_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--goal", default=None)
     parser.add_argument("--done", default=None)
@@ -1640,6 +1912,28 @@ def build_parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo", help="Reproduce the README story in an isolated mailbox")
     demo.add_argument("--json", action="store_true")
     demo.set_defaults(func=cmd_demo)
+
+    version = sub.add_parser("version", help="Print sesstalk version")
+    version.set_defaults(func=cmd_version)
+
+    schema = sub.add_parser("schema", help="Print the work envelope JSON Schema")
+    schema.set_defaults(func=cmd_schema)
+
+    doctor = sub.add_parser("doctor", help="Diagnose mailbox, identity, MCP, and hooks")
+    doctor.set_defaults(func=cmd_doctor)
+
+    init = sub.add_parser("init", help="as + bind in one step")
+    init.add_argument("--name", required=True)
+    init.add_argument("--vendor", default="unknown")
+    init.add_argument("--socket", default=None)
+    init.add_argument("--thread-id", dest="thread_id", default=None)
+    init.add_argument("--app-server", dest="app_server", default=None)
+    init.set_defaults(func=cmd_init)
+
+    log = sub.add_parser("log", help="Show recent queue lines without consuming them")
+    log.add_argument("--name", default="")
+    log.add_argument("--limit", type=int, default=20)
+    log.set_defaults(func=cmd_log)
     return parser
 
 
@@ -1756,6 +2050,27 @@ def _mcp_tools() -> list[dict[str, Any]]:
                 {"name": string, "vendor": string, "socket": string, "thread_id": string, "app_server": string},
                 ["name"],
             ),
+            ("sesstalk_doctor", "Diagnose mailbox home, identities, MCP, and hooks. Read-only.", {}, []),
+            (
+                "sesstalk_log",
+                "Show recent queue lines without consuming them.",
+                {"name": string, "limit": {"type": "integer"}},
+                [],
+            ),
+            ("sesstalk_version", "Print sesstalk version.", {}, []),
+            ("sesstalk_schema", "Print the work envelope JSON Schema.", {}, []),
+            (
+                "sesstalk_init",
+                "as + bind in one step. Name this chat and remember its vendor.",
+                {
+                    "name": string,
+                    "vendor": string,
+                    "socket": string,
+                    "thread_id": string,
+                    "app_server": string,
+                },
+                ["name"],
+            ),
         ]
     ]
 
@@ -1786,6 +2101,11 @@ def _mcp_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         "sesstalk_release": ["release"],
         "sesstalk_claims": ["claims"],
         "sesstalk_bind": ["bind", "--name", str(arguments.get("name", ""))],
+        "sesstalk_doctor": ["doctor"],
+        "sesstalk_log": ["log"],
+        "sesstalk_version": ["version"],
+        "sesstalk_schema": ["schema"],
+        "sesstalk_init": ["init", "--name", str(arguments.get("name") or "")],
     }
     argv = mapping.get(name)
     if argv is None:
@@ -1859,6 +2179,20 @@ def _mcp_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             extra += ["--thread-id", str(arguments["thread_id"])]
         if arguments.get("app_server"):
             extra += ["--app-server", str(arguments["app_server"])]
+    elif name == "sesstalk_log":
+        if arguments.get("name"):
+            extra += ["--name", str(arguments["name"])]
+        if arguments.get("limit") is not None:
+            extra += ["--limit", str(int(arguments["limit"]))]
+    elif name == "sesstalk_init":
+        if arguments.get("vendor"):
+            extra += ["--vendor", str(arguments["vendor"])]
+        if arguments.get("socket"):
+            extra += ["--socket", str(arguments["socket"])]
+        if arguments.get("thread_id"):
+            extra += ["--thread-id", str(arguments["thread_id"])]
+        if arguments.get("app_server"):
+            extra += ["--app-server", str(arguments["app_server"])]
     ns = parser.parse_args(argv + extra)
     if ns.cmd in {"send", "reply"}:
         ns.text = " ".join(ns.text).strip() if isinstance(ns.text, list) else (ns.text or "")
@@ -1896,7 +2230,7 @@ def cmd_mcp(_args: argparse.Namespace) -> None:
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "sesstalk", "version": "0.4.0"},
+                        "serverInfo": {"name": "sesstalk", "version": VERSION},
                     },
                 }
             )
