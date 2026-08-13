@@ -1,0 +1,16 @@
+[project]
+name = "sesstalk"
+version = "0.1.0"
+description = "Local mailbox so Cursor, Claude Code, Codex, and Grok sessions can talk to each other."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "EndeavorYen" }]
+keywords = [
+  "ai-agents",
+  "cursor",
+  "claude-code",
+  "codex",
+  "session-messaging",
+  "mailbox",
+]

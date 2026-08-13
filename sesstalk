@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -n "${SESSTALK_PYTHON:-}" ]]; then
+  exec "$SESSTALK_PYTHON" -S "$SCRIPT_DIR/sesstalk.py" "$@"
+fi
+exec python3 -S "$SCRIPT_DIR/sesstalk.py" "$@"
