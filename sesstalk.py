@@ -187,6 +187,58 @@ def identity_name(home: Path, explicit: str | None) -> str:
     return ""
 
 
+def _resolved_path(raw: str | Path) -> Path | None:
+    try:
+        return Path(raw).expanduser().resolve()
+    except OSError:
+        return None
+
+
+def hook_cwd_from_event(event: dict[str, Any]) -> Path | None:
+    for key in ("cwd", "workspace", "workspace_root"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return _resolved_path(value)
+    roots = event.get("workspace_roots")
+    if isinstance(roots, list) and roots:
+        first = roots[0]
+        if isinstance(first, str) and first.strip():
+            return _resolved_path(first)
+    return _resolved_path(os.getcwd())
+
+
+def inbox_for_cwd(home: Path, cwd: Path | None) -> str:
+    if cwd is None:
+        return ""
+    scored: list[tuple[int, str]] = []
+    for name, bind in load_binds(home).items():
+        if not isinstance(bind, dict):
+            continue
+        bound = _resolved_path(str(bind.get("cwd") or ""))
+        if bound is None:
+            continue
+        if cwd == bound or bound in cwd.parents:
+            scored.append((len(bound.parts), name))
+    if not scored:
+        return ""
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best = scored[0][0]
+    names = [name for length, name in scored if length == best]
+    if len(names) != 1:
+        return ""
+    return names[0]
+
+
+def resolve_hook_name(home: Path, explicit: str | None, event: dict[str, Any]) -> str:
+    if explicit:
+        return identity_name(home, explicit)
+    for key in ("SESSTALK_NAME", "AGENT_BUS_NAME"):
+        env = os.environ.get(key, "").strip()
+        if env:
+            return normalize_name(env)
+    return inbox_for_cwd(home, hook_cwd_from_event(event))
+
+
 def set_identity(home: Path, name: str) -> None:
     data = load_state(home)
     data["identity"] = name
@@ -980,9 +1032,9 @@ def cmd_hook(args: argparse.Namespace) -> None:
             vendor = "cursor"
         else:
             vendor = "claude"
-    name = identity_name(home, args.name)
+    name = resolve_hook_name(home, args.name, event)
     names = [name] if name else None
-    previews = unread_preview(home, names)
+    previews = unread_preview(home, names) if name else []
     silent = json.dumps({})
     if vendor == "cursor":
         if event.get("status") != "completed":

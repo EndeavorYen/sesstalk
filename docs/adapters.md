@@ -18,9 +18,7 @@ Mailbox JSONL stays vendor-neutral. Nudge never writes vendor fields into the qu
 
 No peer SendMessage. Portable pager is `/receive`.
 
-Real adapter on Windows: `~/.cursor/hooks.json` `stop` hook runs `sesstalk hook --vendor cursor`. If unread mail exists and `status=completed`, it returns `followup_message` (capped by `loop_limit`).
-
-`bind --vendor cursor` makes nudge report `hook_armed`.
+Real adapter on Windows: `~/.cursor/hooks.json` `stop` hook runs `sesstalk hook --vendor cursor`. If unread mail exists and `status=completed`, it returns `followup_message` (capped by `loop_limit`). Without `--name`, the hook maps the workspace cwd to a unique `bind --cwd` inbox. Two chats in the same folder stay silent (do not guess). `bind --vendor cursor` makes nudge report `hook_armed`.
 
 ### Claude Code
 

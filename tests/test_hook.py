@@ -63,3 +63,29 @@ class HookTests(unittest.TestCase):
         result = payload(run_cli(self.home, "nudge", "--name", "peer", "--vendor", "cursor"))
         self.assertEqual(result["attention"], "hook_armed")
         self.assertEqual(result["status"], "queued")
+
+    def test_hook_maps_cwd_to_bound_inbox(self) -> None:
+        ws_a = self.home / "proj-a"
+        ws_b = self.home / "proj-b"
+        ws_a.mkdir()
+        ws_b.mkdir()
+        run_cli(self.home, "bind", "--name", "cursor-a", "--vendor", "cursor", cwd=ws_a)
+        run_cli(self.home, "bind", "--name", "cursor-b", "--vendor", "cursor", cwd=ws_b)
+        run_cli(self.home, "send", "--from", "claude", "--to", "cursor-a", "review a")
+        event = json.dumps({"hook_event_name": "stop", "status": "completed", "loop_count": 0})
+        hit = run_cli(self.home, "hook", "--vendor", "cursor", stdin=event, cwd=ws_a)
+        body = json.loads(hit.stdout)
+        self.assertIn("followup_message", body)
+        self.assertIn("review a", body["followup_message"])
+        miss = run_cli(self.home, "hook", "--vendor", "cursor", stdin=event, cwd=ws_b)
+        self.assertEqual(json.loads(miss.stdout), {})
+
+    def test_hook_stays_silent_when_two_binds_share_cwd(self) -> None:
+        ws = self.home / "shared"
+        ws.mkdir()
+        run_cli(self.home, "bind", "--name", "cursor-a", "--vendor", "cursor", cwd=ws)
+        run_cli(self.home, "bind", "--name", "cursor-b", "--vendor", "cursor", cwd=ws)
+        run_cli(self.home, "send", "--from", "claude", "--to", "cursor-a", "do not wake the wrong chat")
+        event = json.dumps({"hook_event_name": "stop", "status": "completed", "loop_count": 0})
+        result = run_cli(self.home, "hook", "--vendor", "cursor", stdin=event, cwd=ws)
+        self.assertEqual(json.loads(result.stdout), {})

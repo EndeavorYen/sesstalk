@@ -17,6 +17,7 @@ def run_cli(
     timeout: float | None = None,
     extra_env: dict[str, str] | None = None,
     stdin: str | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SESSTALK_HOME"] = str(home)
@@ -30,6 +31,7 @@ def run_cli(
         text=True,
         timeout=timeout,
         input=stdin,
+        cwd=str(cwd) if cwd is not None else None,
     )
 
 
