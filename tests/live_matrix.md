@@ -20,3 +20,4 @@ Checks per cell:
 5. `/who` shows `listening` during receive
 7. Fan-out `--to a --to b` shares `thread`
 8. `/peek` does not consume; `--drain` empties a backlog
+9. `/claim` conflict; Stop/stop hook followup when unread (see `docs/pairing.md`)

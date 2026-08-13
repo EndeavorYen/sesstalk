@@ -20,7 +20,7 @@ PowerShell:
 python install.py --verify
 ```
 
-That copies the CLI to `~/.sesstalk` (or `%USERPROFILE%\.sesstalk`), installs skills plus slash commands for Cursor, Claude Code, Codex, and Grok when those folders exist, and smoke-tests send/receive. Pass `--no-mcp` to skip registering the stdio MCP server.
+That copies the CLI to `~/.sesstalk` (or `%USERPROFILE%\.sesstalk`), installs skills plus slash commands for Cursor, Claude Code, Codex, and Grok when those folders exist, registers MCP and Stop/stop hooks, and smoke-tests send/receive. Pass `--no-mcp` or `--no-hooks` to skip those.
 
 `~/.agent-bus` is deprecated. This installer never writes there.
 
@@ -39,6 +39,8 @@ Each chat picks a name, then talks:
 /reply lgtm, tests next
 /who
 /nudge cursor-b --vendor cursor
+/bind cursor-a --vendor cursor
+/claim src/auth.ts
 ```
 
 | Command | What it does |
@@ -51,6 +53,8 @@ Each chat picks a name, then talks:
 | `/reply <text>` | Reply to the last inbound sender (inherits `thread`) |
 | `/who` | `listening` / `idle` / `unknown` plus unread (`/list-bus` alias) |
 | `/nudge <peer>` | Best-effort wake; distinct from `/send` |
+| `/bind <name> --vendor ...` | Remember vendor so nudge can report `hook_armed` |
+| `/claim <path>` | Lease a file so another session does not edit it |
 
 Two Cursor chats need two names (`cursor-a`, `cursor-b`). Always pass `--from` / `--name` from this chat's `/as`.
 
@@ -65,6 +69,10 @@ Each session is an inbox, not a chat room.
 3. Fan-out one work object: `--to claude --to codex` (or `--to claude,codex`). Copies share `thread` and `audience`
 4. Keep `--thread auth-review` for a task. `/reply` inherits it. To update the whole group, `send --to` the rest of `audience` with the same thread
 5. The worker stays on `/receive`. `/peek` does not consume. `/receive --drain` empties a backlog without waiting
+6. `/claim` a path before editing; `/who` lists leases
+7. `/bind --vendor cursor` then `/nudge` — `hook_armed` means the Stop/stop hook will continue a finishing turn. Already at the prompt is still idle. See `docs/adapters.md`.
+
+Three-window live recipe: `docs/pairing.md`.
 
 ## CLI
 
@@ -121,11 +129,12 @@ Stale listeners (crashed receive) expire within a few seconds. `list` is an alia
 `send` only appends JSONL. `nudge` tries to start a turn:
 
 - `attention: listening` — peer already blocked on receive
-- `attention: started_turn` — an adapter started a turn
-- `attention: idle_no_adapter` — mail may be queued; peer is prompt-idle
+- `attention: started_turn` — an adapter delivered a wake (tests, or Claude Unix inbox socket)
+- `attention: hook_armed` — Stop/stop hook will continue a **finishing** turn; sitting at the prompt is still idle
+- `attention: idle_no_adapter` — queued only; `blocker` says why
 - `attention: error` — adapter failed honestly
 
-Set `SESSTALK_NUDGE_ADAPTER=fake_started|fake_fail|none` in tests. Real Claude SendMessage / Codex turn/start / Cursor sidecar are optional later; without an adapter, nudge must not pretend the peer moved.
+Installer registers Cursor/Claude/Codex stop hooks (`sesstalk hook`). `sesstalk bind --name <peer> --vendor cursor` opts that inbox into `hook_armed`. Details: `docs/adapters.md`.
 
 ## MCP
 

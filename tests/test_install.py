@@ -31,7 +31,7 @@ class InstallTests(unittest.TestCase):
                 env["HOMEPATH"] = str(home)[2:] or "\\"
             env["SESSTALK_HOME"] = str(Path(tmp) / ".sesstalk")
             first = subprocess.run(
-                [sys.executable, "-S", str(ROOT / "install.py"), "--verify", "--no-mcp"],
+                [sys.executable, "-S", str(ROOT / "install.py"), "--verify", "--no-mcp", "--no-hooks"],
                 cwd=str(ROOT),
                 env=env,
                 capture_output=True,
@@ -39,7 +39,7 @@ class InstallTests(unittest.TestCase):
             )
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
             second = subprocess.run(
-                [sys.executable, "-S", str(ROOT / "install.py"), "--verify", "--no-mcp"],
+                [sys.executable, "-S", str(ROOT / "install.py"), "--verify", "--no-mcp", "--no-hooks"],
                 cwd=str(ROOT),
                 env=env,
                 capture_output=True,

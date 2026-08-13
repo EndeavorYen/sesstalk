@@ -108,6 +108,101 @@ def merge_codex_mcp(cli_dir: Path) -> bool:
     return True
 
 
+def hook_command_plain(cli_dir: Path, vendor: str) -> str:
+    return f'"{python_path()}" -S "{cli_dir / "sesstalk.py"}" hook --vendor {vendor}'
+
+
+def merge_cursor_hooks(cli_dir: Path) -> bool:
+    if not (HOME / ".cursor").exists():
+        return False
+    path = HOME / ".cursor" / "hooks.json"
+    config: dict = {"version": 1, "hooks": {}}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                config = loaded
+        except json.JSONDecodeError:
+            pass
+    hooks = config.setdefault("hooks", {})
+    stops = list(hooks.get("stop") or [])
+    cmd = hook_command_plain(cli_dir, "cursor")
+    if not any(
+        isinstance(item, dict) and "sesstalk.py" in str(item.get("command") or "") and "hook" in str(item.get("command") or "")
+        for item in stops
+    ):
+        stops.append({"command": cmd, "loop_limit": 5})
+        hooks["stop"] = stops
+        path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {path}")
+    else:
+        print(f"kept {path}")
+    return True
+
+
+def merge_claude_hooks(cli_dir: Path) -> bool:
+    if not (HOME / ".claude").exists():
+        return False
+    path = HOME / ".claude" / "settings.json"
+    config: dict = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                config = loaded
+        except json.JSONDecodeError:
+            pass
+    hooks = config.setdefault("hooks", {})
+    stops = list(hooks.get("Stop") or [])
+    cmd = hook_command_plain(cli_dir, "claude")
+    encoded = json.dumps(stops)
+    if "sesstalk.py" in encoded and "hook" in encoded:
+        print(f"kept {path}")
+        return True
+    stops.append({"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
+    hooks["Stop"] = stops
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {path}")
+    return True
+
+
+def merge_codex_hooks(cli_dir: Path) -> bool:
+    if not (HOME / ".codex").exists():
+        return False
+    path = HOME / ".codex" / "hooks.json"
+    config: dict = {"hooks": {}}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                config = loaded
+        except json.JSONDecodeError:
+            pass
+    hooks = config.setdefault("hooks", {})
+    stops = list(hooks.get("Stop") or [])
+    cmd = hook_command_plain(cli_dir, "codex")
+    encoded = json.dumps(stops)
+    if "sesstalk.py" in encoded and "hook" in encoded:
+        print(f"kept {path}")
+        return True
+    stops.append(
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": cmd,
+                    "timeout": 10,
+                    "statusMessage": "sesstalk unread?",
+                }
+            ]
+        }
+    )
+    hooks["Stop"] = stops
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {path}")
+    return True
+
+
 def verify_mailbox(cli_py: Path) -> None:
     import tempfile
 
@@ -138,6 +233,7 @@ def verify_mailbox(cli_py: Path) -> None:
 def doctor(
     cli_dir: Path,
     mcp_registered: dict[str, bool],
+    hooks_registered: dict[str, bool],
     configured: list[str],
     skipped: list[str],
 ) -> None:
@@ -147,6 +243,7 @@ def doctor(
         "cli": str(cli_dir / "sesstalk.py"),
         "mcp_registered": any(mcp_registered.values()),
         "mcp": mcp_registered,
+        "hooks": hooks_registered,
         "configured": configured,
         "skipped": skipped,
         "deprecated_agent_bus": str(HOME / ".agent-bus"),
@@ -167,6 +264,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Install sesstalk")
     parser.add_argument("--verify", action="store_true", help="Smoke send/receive after install")
     parser.add_argument("--no-mcp", action="store_true", help="Do not register Cursor MCP")
+    parser.add_argument("--no-hooks", action="store_true", help="Do not register Stop/stop hooks")
     args = parser.parse_args()
 
     skill_src = ROOT / "skills" / "SKILL.md"
@@ -202,10 +300,16 @@ def main() -> None:
         mcp_registered["claude"] = merge_claude_mcp(cli_dir)
         mcp_registered["codex"] = merge_codex_mcp(cli_dir)
 
+    hooks_registered = {"cursor": False, "claude": False, "codex": False}
+    if not args.no_hooks:
+        hooks_registered["cursor"] = merge_cursor_hooks(cli_dir)
+        hooks_registered["claude"] = merge_claude_hooks(cli_dir)
+        hooks_registered["codex"] = merge_codex_hooks(cli_dir)
+
     print("configured:", ", ".join(configured) or "(none)")
     print("skipped:", ", ".join(skipped) or "(none)")
     print("deprecated ~/.agent-bus is unused; installer does not write there")
-    doctor(cli_dir, mcp_registered, configured, skipped)
+    doctor(cli_dir, mcp_registered, hooks_registered, configured, skipped)
     if args.verify:
         verify_mailbox(cli_dir / "sesstalk.py")
     print("ok")
