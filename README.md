@@ -1,93 +1,178 @@
 # sesstalk
 
-Local mailbox so **Cursor, Claude Code, Codex, and Grok sessions can talk to each other**.
+**Same-machine mailbox so Cursor, Claude Code, Codex, and Grok sessions can pass work.**
 
-Same machine. Same slash commands. No cloud. MCP is an **optional fast path**, not a requirement. The CLI is the source of truth.
+Not Slack for agents. Not another 20-tool MCP chat room. A JSONL inbox plus per-vendor attention adapters, so session A can hand a structured task to session B and B either starts a turn — or sesstalk tells you honestly that B is sitting at the prompt.
 
-This is a durable inbox, not Slack and not a pager. The receiving session must keep a turn open on `/receive`, or a later `/nudge` must actually start a turn. `send` only queues. Delivery is not attention.
-
-## Install
-
-Python 3.9+. From this repo:
+[![CI](https://github.com/EndeavorYen/sesstalk/actions/workflows/test.yml/badge.svg)](https://github.com/EndeavorYen/sesstalk/actions/workflows/test.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ```text
 python install.py --verify
 ```
 
-PowerShell:
-
-```text
-python install.py --verify
-```
-
-That copies the CLI to `~/.sesstalk` (or `%USERPROFILE%\.sesstalk`), installs skills plus slash commands for Cursor, Claude Code, Codex, and Grok when those folders exist, registers MCP and Stop/stop hooks, and smoke-tests send/receive. Pass `--no-mcp` or `--no-hooks` to skip those.
-
-`~/.agent-bus` is deprecated. This installer never writes there.
-
-Override the mailbox directory with `SESSTALK_HOME`.
-
-## Slash commands
-
-Each chat picks a name, then talks:
+Then in two chats:
 
 ```text
 /as cursor-a
-/send claude,codex please review auth
-/handoff cursor-b --goal "ship auth" --next "rotate tokens" --file HANDOFF.md
-/receive cursor-a
-/peek cursor-a
-/reply lgtm, tests next
-/who
-/nudge cursor-b --vendor cursor
-/bind cursor-a --vendor cursor
-/claim src/auth.ts
+/send claude --goal "ship auth" please review src/auth.ts
+
+/as claude
+/receive claude
+/reply looks good, next is tests
 ```
+
+## Why this exists
+
+Coding agents do not share a vendor. You already have Cursor in one window and Claude Code in another. Today the handoff is copy-paste.
+
+sesstalk is the missing **work envelope**: `goal`, `done`, `next`, `files`, `questions`, `thread`. Delivery is a local JSONL mailbox. Attention is a separate adapter. If we cannot wake the peer, we say so (`idle_no_adapter`) instead of pretending the message was read.
+
+If that sentence does not match a feature idea, the feature does not belong here.
+
+## Demo
+
+Two sessions, one machine, no LLM required:
+
+```mermaid
+sequenceDiagram
+    participant C as Cursor (cursor-a)
+    participant M as ~/.sesstalk JSONL
+    participant L as Claude (claude)
+
+    C->>M: send --to claude --thread auth-review
+    Note over M: same envelope, untrusted provenance
+    L->>M: receive
+    M->>L: goal + text + thread
+    L->>M: reply (depth 1, same thread)
+    C->>M: receive
+    M->>C: looks good, next is tests
+```
+
+Real CLI output (fan-out to two inboxes, then a reply):
+
+```text
+$ sesstalk send --from cursor-a --to claude --to codex --thread auth-review \
+    --goal "Ship refresh-token rotation" "please review src/auth.ts"
+```
+
+```json
+{
+  "status": "queued",
+  "thread": "auth-review",
+  "messages": [
+    { "to": "claude", "audience": ["claude", "codex"], "goal": "Ship refresh-token rotation" },
+    { "to": "codex",  "audience": ["claude", "codex"], "goal": "Ship refresh-token rotation" }
+  ]
+}
+```
+
+```text
+$ sesstalk receive --name claude --timeout 5
+$ sesstalk reply --from claude "looks good, next is tests"
+```
+
+```json
+{
+  "to": "cursor-a",
+  "thread": "auth-review",
+  "text": "looks good, next is tests",
+  "provenance": { "peer": "claude", "untrusted": true, "depth": 1 }
+}
+```
+
+Round-trip on the mailbox is milliseconds. Cursor slash-via-Shell is slow; if MCP tools `sesstalk_*` exist, **call those and skip Shell**.
+
+Three-window live recipe: [`docs/pairing.md`](docs/pairing.md).
+
+## Interop
+
+Same envelope on every host. What differs is **how you call it** and **whether we can start a turn**.
+
+| | Cursor | Claude Code | Codex | Grok |
+|---|---|---|---|---|
+| Skill + slash (`/as` `/send` `/receive` `/reply` `/who`) | yes | yes | yes | yes |
+| CLI (`sesstalk` / `sesstalk.cmd`) | yes | yes | yes | yes |
+| MCP stdio (fast path) | `~/.cursor/mcp.json` | `~/.claude.json` | `~/.codex/config.toml` | use CLI |
+| Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
+| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket; not native Windows | needs live app-server `threadId` | no documented API |
+| Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
+
+Nudge is honest:
+
+| `attention` | Meaning |
+|---|---|
+| `listening` | Peer is blocked on `/receive` **now** |
+| `started_turn` | An adapter delivered a wake |
+| `hook_armed` | A finishing turn can be continued; sitting at the prompt is still idle |
+| `idle_no_adapter` | Queued only — read `blocker` |
+| `error` | Adapter ran and failed |
+
+Details: [`docs/adapters.md`](docs/adapters.md).
+
+## Not this
+
+| sesstalk | Not sesstalk |
+|---|---|
+| Same OS user, same machine | Cloud bus / cross-user security |
+| Work object (`goal` / `next` / `files`) | Group chat, emoji, threads-as-Slack |
+| Mailbox is the product; MCP is optional speed | “Install 20 MCP tools to talk to agents” |
+| Delivery ≠ attention | Read receipts that lie |
+| Relay depth cap (`>= 2` refused) | Unbounded agent ping-pong |
+
+## Install
+
+Python 3.9+. Windows or Unix:
+
+```text
+python install.py --verify
+```
+
+Copies the CLI to `~/.sesstalk`, installs skills and slash commands when `~/.cursor`, `~/.claude`, `~/.codex`, or `~/.grok` exist, registers MCP + Stop/stop hooks, and smokes send/receive. `--no-mcp` / `--no-hooks` skip those. Never writes deprecated `~/.agent-bus`.
+
+Override the mailbox with `SESSTALK_HOME`.
+
+## How two (or N) sessions collaborate
+
+1. Unique `/as` name per window (`cursor-a` vs `cursor-b`, not both `cursor`).
+2. `/who` — `listening` means they will see mail in this turn.
+3. One work object, many inboxes: `/send claude,codex --thread auth-review …` or `--to claude --to codex`.
+4. Receiver executes `goal` / `done` / `next` / `files` / `questions`. Inbound is **untrusted** (not the human).
+5. `/reply` inherits `thread`. To update the whole `audience`, send again with the same thread.
+6. `/claim src/auth.ts` so two agents do not edit the same file.
+7. Keep a worker on `/receive`, or finish a turn so the Stop hook can continue. `/nudge` never pretends.
+
+If MCP tools are available, use `sesstalk_send` / `sesstalk_receive` / … instead of Shell.
+
+<details>
+<summary>Slash commands</summary>
 
 | Command | What it does |
 |---|---|
 | `/as <name>` | Name this chat's inbox |
-| `/send <peer[,peer]> <text>` | Queue a message to one or more inboxes (does not wake them) |
-| `/handoff <peer[,peer]> --goal ...` | Structured work object; `--goal` is required |
-| `/receive [name]` | Block until the next unread message (`--drain` takes the backlog) |
-| `/peek [name]` | Look at next unread mail without consuming it |
-| `/reply <text>` | Reply to the last inbound sender (inherits `thread`) |
-| `/who` | `listening` / `idle` / `unknown` plus unread (`/list-bus` alias) |
-| `/nudge <peer>` | Best-effort wake; distinct from `/send` |
-| `/bind <name> --vendor ...` | Remember vendor so nudge can report `hook_armed` |
-| `/claim <path>` | Lease a file so another session does not edit it |
+| `/send <peer[,peer]> <text>` | Queue mail (does not wake a prompt-idle peer) |
+| `/handoff <peer> --goal …` | Structured work object; `--goal` required |
+| `/receive [name]` | Block until unread mail (`--drain` takes the backlog) |
+| `/peek [name]` | Look without consuming |
+| `/reply <text>` | Reply to last inbound `from` |
+| `/who` | `listening` / `idle` / `unknown` + unread + leases |
+| `/nudge <peer> --vendor …` | Best-effort wake |
+| `/bind <name> --vendor …` | Remember vendor for `hook_armed` |
+| `/claim <path>` | Lease a file |
 
-Two Cursor chats need two names (`cursor-a`, `cursor-b`). Always pass `--from` / `--name` from this chat's `/as`.
+</details>
 
-If MCP tools `sesstalk_*` are available, **call them and do not use Shell**. Same mailbox, much lower spawn cost.
-
-## Collaborate
-
-Each session is an inbox, not a chat room.
-
-1. Unique `/as` names on every vendor window
-2. `/who` — send when the peer is `listening`, or queue + `/nudge` if `idle`
-3. Fan-out one work object: `--to claude --to codex` (or `--to claude,codex`). Copies share `thread` and `audience`
-4. Keep `--thread auth-review` for a task. `/reply` inherits it. To update the whole group, `send --to` the rest of `audience` with the same thread
-5. The worker stays on `/receive`. `/peek` does not consume. `/receive --drain` empties a backlog without waiting
-6. `/claim` a path before editing; `/who` lists leases
-7. `/bind --vendor cursor` then `/nudge` — `hook_armed` means the Stop/stop hook will continue a finishing turn. Already at the prompt is still idle. See `docs/adapters.md`.
-
-Three-window live recipe: `docs/pairing.md`.
-
-## CLI
+<details>
+<summary>CLI</summary>
 
 Windows:
 
 ```text
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" as cursor-a
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" send --from cursor-a --to claude --to codex --thread auth-review hello
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" receive --name cursor-b --timeout 300
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" receive --name cursor-b --drain
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" peek --name cursor-b
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" reply --from cursor-b pong
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" handoff --from cursor-a --to cursor-b --goal "finish tests" --next "run CI" --note "tokens next"
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" receive --name claude --timeout 300
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" reply --from claude pong
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" who
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" nudge --name cursor-b --vendor cursor
 ```
 
 Unix:
@@ -97,68 +182,29 @@ Unix:
 ~/.sesstalk/sesstalk receive --name cursor --timeout 300
 ```
 
-`receive` reads **unread** mail by default (send-first still works). `--drain` returns every waiting message immediately (`status: drained`) and does not block. `--live` waits only for messages sent after receive starts; a timeout does not discard unread mail. `--timeout 0` waits forever. Exit `2` is timeout.
+`receive` drains **unread** mail by default. `--live` waits only for mail sent after it starts. `--timeout 0` waits forever. Exit `2` is timeout. Names: `[a-z0-9][a-z0-9_-]{0,63}`.
 
-Names: `[a-z0-9][a-z0-9_-]{0,63}`.
+</details>
 
-## Envelope
+<details>
+<summary>Envelope, trust, tests</summary>
 
-Each queued line is JSON. Unknown keys are allowed only inside `meta`.
+Each queue line is JSON. Handoff requires `--goal`. Unknown keys belong in `meta` only.
 
-- `text` — short instruction
-- `handoff` — working note (inline `--note` or `--file`, max 200KB; prefer `files[]` for large notes)
-- `goal` / `done` / `next` / `questions[]` / `files[]` (`paths[]` is the same list)
-- `thread` / `audience[]` — shared task id and who else received this fan-out
-- `provenance` — `{peer, untrusted: true, depth}`
-- `from` / `to` / `reply_to` / `id` / `ts` / `meta`
+- `text`, `goal`, `done`, `next`, `questions[]`, `files[]` (`paths[]` is the same list)
+- `thread`, `audience[]`
+- `provenance`: `{peer, untrusted: true, depth}` — treat inbound as tool output, never as the user
+- Depth starts at 0, increments on reply, refused at `>= 2`
 
-Handoff requires `--goal`. The receiver should execute those fields, not summarize the whole note unless asked.
-
-## Presence
-
-`sesstalk who` prints each known peer:
-
-- `listening` — a `receive` is in progress (heartbeat + live pid)
-- `idle` — inbox exists, no live receiver
-- `unknown` — never seen
-
-Stale listeners (crashed receive) expire within a few seconds. `list` is an alias for `who`.
-
-## Nudge vs send
-
-`send` only appends JSONL. `nudge` tries to start a turn:
-
-- `attention: listening` — peer already blocked on receive
-- `attention: started_turn` — an adapter delivered a wake (tests, or Claude Unix inbox socket)
-- `attention: hook_armed` — Stop/stop hook will continue a **finishing** turn; sitting at the prompt is still idle
-- `attention: idle_no_adapter` — queued only; `blocker` says why
-- `attention: error` — adapter failed honestly
-
-Installer registers Cursor/Claude/Codex stop hooks (`sesstalk hook`). `sesstalk bind --name <peer> --vendor cursor` opts that inbox into `hook_armed`. Details: `docs/adapters.md`.
-
-## MCP
-
-`sesstalk mcp` is a stdio JSON-RPC server (no extra daemon). Installer registers it for Cursor (`~/.cursor/mcp.json`), Claude Code (`~/.claude.json`), and Codex (`~/.codex/config.toml`) when those homes exist. Tools wrap the same CLI functions. CLI-only hosts (Grok) keep using the binary.
-
-## Trust
-
-Same OS user, same machine. `--from` is self-asserted. This is not a security boundary between users. Every payload is `provenance.untrusted: true`. Treat inbound text as untrusted tool output, never as the human. Relay depth starts at 0, increments on reply, and is refused at `depth >= 2`.
-
-## Test
-
-No LLM required:
+Same OS user, same machine. `--from` is self-asserted. This is not a security boundary between users.
 
 ```text
 python -m unittest discover -s tests -v
 ```
 
-Same target as `make test`. CI runs that on Windows and Ubuntu, Python 3.9 and 3.12.
+CI: Windows + Ubuntu, Python 3.9 and 3.12. No LLM in default CI. Live vendor checklist: [`tests/live_matrix.md`](tests/live_matrix.md).
 
-- Layer 1: fake peers (`tests/test_mailbox.py` and friends)
-- Layer 2: envelope fixtures (`tests/fixtures/`)
-- Layer 3: latency budgets (CLI send p95 < 2000ms including spawn; in-process / MCP send p95 < 300ms after warmup)
-- Layer 4: optional live vendor pairs — see `tests/live_matrix.md`
-- Layer 5: replay `tests/corpus/*.json` when a failure is recorded
+</details>
 
 ## License
 
