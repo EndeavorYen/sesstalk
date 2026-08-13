@@ -44,7 +44,7 @@ Not Slack. Not a cloud bus. Not 20 MCP chat tools.
 
 Follow-ups that stay in scope:
 
-- Real Codex `app-server --listen unix://` is WebSocket-over-UDS; Layer 1 `unix://` today is newline JSON-RPC for tests. Document or implement WS-over-UDS without spawning.
+- Real Codex `app-server --listen unix://` is WebSocket-over-UDS; use `ws+unix://PATH`. Layer 1 `unix://` stays newline JSON-RPC for fake peers. Native Windows: `idle_no_adapter`.
 - Grok: keep `/receive`; no fake wake API
 
 ## Anti-goals (reject PRs)

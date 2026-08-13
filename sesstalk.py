@@ -18,7 +18,7 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MAX_RELAY_DEPTH = 2
 LISTENER_TTL_S = 3.0
 VENDORS = ("cursor", "claude", "codex", "grok")
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 ENVELOPE_KEYS = (
     "id",
     "ts",
@@ -1319,9 +1319,57 @@ def _ws_decode_unmasked(buf: bytes) -> tuple[str | None, bytes]:
     return None, buf[idx:]
 
 
-def jsonrpc_over_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _jsonrpc_over_ws_socket(client: Any, payload: dict[str, Any], *, host: str, path: str) -> dict[str, Any]:
     import base64
     import hashlib
+
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    )
+    client.sendall(request.encode("ascii"))
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = client.recv(4096)
+        if not chunk:
+            raise OSError("websocket handshake closed")
+        buf += chunk
+    header, rest_buf = buf.split(b"\r\n\r\n", 1)
+    if b"101" not in header.split(b"\r\n", 1)[0]:
+        raise OSError("websocket handshake refused")
+    expected = base64.b64encode(
+        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+    ).decode("ascii")
+    accept = ""
+    for line in header.decode("iso-8859-1").split("\r\n"):
+        if line.lower().startswith("sec-websocket-accept:"):
+            accept = line.split(":", 1)[1].strip()
+    if accept and accept != expected:
+        raise OSError("websocket accept mismatch")
+    client.sendall(_ws_client_frame(json.dumps(payload)))
+    buf = rest_buf
+    text = None
+    while text is None:
+        text, buf = _ws_decode_unmasked(buf)
+        if text is not None:
+            break
+        chunk = client.recv(4096)
+        if not chunk:
+            raise OSError("empty websocket reply")
+        buf += chunk
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise OSError("app-server websocket reply was not an object")
+    return data
+
+
+def jsonrpc_over_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     import socket as sockmod
 
     host, port = _codex_endpoint_host_port(endpoint)
@@ -1333,56 +1381,41 @@ def jsonrpc_over_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         path = "/" + rest.split("/", 1)[1]
         if not path:
             path = "/"
-    key = base64.b64encode(os.urandom(16)).decode("ascii")
-    request = (
-        f"GET {path} HTTP/1.1\r\n"
-        f"Host: {host}:{port}\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Key: {key}\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "\r\n"
-    )
     client = sockmod.socket(sockmod.AF_INET, sockmod.SOCK_STREAM)
     try:
         client.settimeout(2)
         client.connect((host, port))
-        client.sendall(request.encode("ascii"))
-        buf = b""
-        while b"\r\n\r\n" not in buf:
-            chunk = client.recv(4096)
-            if not chunk:
-                raise OSError("websocket handshake closed")
-            buf += chunk
-        header, rest_buf = buf.split(b"\r\n\r\n", 1)
-        if b"101" not in header.split(b"\r\n", 1)[0]:
-            raise OSError("websocket handshake refused")
-        expected = base64.b64encode(
-            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
-        ).decode("ascii")
-        accept = ""
-        for line in header.decode("iso-8859-1").split("\r\n"):
-            if line.lower().startswith("sec-websocket-accept:"):
-                accept = line.split(":", 1)[1].strip()
-        if accept and accept != expected:
-            raise OSError("websocket accept mismatch")
-        client.sendall(_ws_client_frame(json.dumps(payload)))
-        buf = rest_buf
-        text = None
-        while text is None:
-            text, buf = _ws_decode_unmasked(buf)
-            if text is not None:
-                break
-            chunk = client.recv(4096)
-            if not chunk:
-                raise OSError("empty websocket reply")
-            buf += chunk
+        return _jsonrpc_over_ws_socket(client, payload, host=f"{host}:{port}", path=path)
     finally:
         client.close()
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise OSError("app-server websocket reply was not an object")
-    return data
+
+
+def _unix_ws_path(endpoint: str) -> str:
+    raw = endpoint.strip()
+    for prefix in ("ws+unix://", "unix+ws://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    if raw.lower().startswith("localhost"):
+        raw = raw[9:]
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    return raw
+
+
+def jsonrpc_over_unix_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    import socket as sockmod
+
+    if sys.platform == "win32":
+        raise OSError("ws+unix:// app-server is not native Windows")
+    sock_path = _unix_ws_path(endpoint)
+    client = sockmod.socket(sockmod.AF_UNIX, sockmod.SOCK_STREAM)
+    try:
+        client.settimeout(2)
+        client.connect(sock_path)
+        return _jsonrpc_over_ws_socket(client, payload, host="localhost", path="/")
+    finally:
+        client.close()
 
 
 def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | None:
@@ -1397,7 +1430,7 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
             "attention": "idle_no_adapter",
             "blocker": (
                 "Codex turn/start needs a live app-server "
-                "(--app-server tcp://127.0.0.1:PORT | ws://... | unix://PATH) "
+                "(--app-server tcp://127.0.0.1:PORT | ws://... | unix://PATH | ws+unix://PATH) "
                 "plus --thread-id; sesstalk will not spawn a second Codex agent"
             ),
             "adapter": "codex_app_server",
@@ -1412,7 +1445,17 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
     }
     try:
         low = endpoint.lower()
-        if low.startswith("unix://"):
+        if low.startswith("ws+unix://") or low.startswith("unix+ws://"):
+            if sys.platform == "win32":
+                return {
+                    "ok": True,
+                    "status": "queued",
+                    "attention": "idle_no_adapter",
+                    "blocker": "ws+unix:// Codex app-server is not native Windows; use ws:// or tcp://, or WSL",
+                    "adapter": "codex_app_server",
+                }
+            reply = jsonrpc_over_unix_ws(endpoint, request)
+        elif low.startswith("unix://"):
             if sys.platform == "win32":
                 return {
                     "ok": True,

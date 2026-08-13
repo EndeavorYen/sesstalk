@@ -134,7 +134,7 @@ Same envelope on every host. What differs is **how you call it** and **whether w
 | CLI (`sesstalk` / `sesstalk.cmd`) | yes | yes | yes | yes |
 | MCP stdio (fast path) | `~/.cursor/mcp.json` | `~/.claude.json` | `~/.codex/config.toml` | use CLI |
 | Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
-| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://`, `ws://`, or `unix://` on Unix); never spawn a second agent | no documented API |
+| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://`, `ws://`, `unix://` JSONL, or `ws+unix://` like real Codex); never spawn a second agent | no documented API |
 | Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
 
 ## Not this

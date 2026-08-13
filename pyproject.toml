@@ -1,6 +1,6 @@
 [project]
 name = "sesstalk"
-version = "0.5.0"
+version = "0.5.1"
 description = "Same-machine mailbox so Cursor, Claude Code, Codex, and Grok sessions can pass work."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -309,3 +309,93 @@ class CodexAdapterTests(unittest.TestCase):
         result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
         self.assertEqual(result["attention"], "idle_no_adapter")
         self.assertIn("Windows", result["blocker"])
+
+    @unittest.skipIf(sys.platform == "win32", "ws+unix:// is not native Windows")
+    def test_fake_unix_websocket_app_server_turn_start(self) -> None:
+        sock_path = str(Path(self.temp.name) / "codex-ws.sock")
+        got: list[dict] = []
+        ready = threading.Event()
+
+        def serve() -> None:
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                server.bind(sock_path)
+                server.listen(1)
+                ready.set()
+                conn, _addr = server.accept()
+                with conn:
+                    conn.settimeout(3)
+                    buf = b""
+                    while b"\r\n\r\n" not in buf:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            return
+                        buf += chunk
+                    headers, rest = buf.split(b"\r\n\r\n", 1)
+                    key = ""
+                    for line in headers.decode("iso-8859-1").split("\r\n"):
+                        if line.lower().startswith("sec-websocket-key:"):
+                            key = line.split(":", 1)[1].strip()
+                    conn.sendall(
+                        (
+                            "HTTP/1.1 101 Switching Protocols\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            f"Sec-WebSocket-Accept: {_ws_accept_key(key)}\r\n"
+                            "\r\n"
+                        ).encode("ascii")
+                    )
+                    buf = rest
+                    payload = None
+                    while payload is None:
+                        payload, buf = _ws_decode_client_frame(buf)
+                        if payload is not None:
+                            break
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            return
+                        buf += chunk
+                    got.append(json.loads(payload))
+                    conn.sendall(
+                        _ws_encode_server_text(json.dumps({"id": 1, "result": {"turn": {"id": "turn_uds_ws"}}}))
+                    )
+            finally:
+                server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.assertTrue(ready.wait(2))
+        run_cli(
+            self.home,
+            "bind",
+            "--name",
+            "codex",
+            "--vendor",
+            "codex",
+            "--thread-id",
+            "thr_uds_ws",
+            "--app-server",
+            f"ws+unix://{sock_path}",
+        )
+        result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
+        thread.join(timeout=3)
+        self.assertEqual(result["attention"], "started_turn")
+        self.assertEqual(got[0]["params"]["threadId"], "thr_uds_ws")
+
+    @unittest.skipUnless(sys.platform == "win32", "native Windows ws+unix:// blocker")
+    def test_windows_unix_ws_app_server_is_honest_blocker(self) -> None:
+        run_cli(
+            self.home,
+            "bind",
+            "--name",
+            "codex",
+            "--vendor",
+            "codex",
+            "--thread-id",
+            "thr_uds_ws",
+            "--app-server",
+            "ws+unix:///tmp/codex.sock",
+        )
+        result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
+        self.assertEqual(result["attention"], "idle_no_adapter")
+        self.assertIn("Windows", result["blocker"])
