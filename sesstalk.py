@@ -839,12 +839,18 @@ def cmd_receive(args: argparse.Namespace) -> None:
 
 def who_payload(home: Path) -> dict[str, Any]:
     ensure_dirs(home)
-    return {
+    names = cwd_identity_names(home)
+    payload: dict[str, Any] = {
         "ok": True,
         "home": str(home),
+        "cwd": cwd_key(),
+        "identities": names,
         "peers": [presence_entry(home, name) for name in collect_names(home)],
         "leases": list_leases(home),
     }
+    if len(names) > 1:
+        payload["warning"] = "this directory has multiple /as names; pass --from"
+    return payload
 
 
 def cmd_who(_args: argparse.Namespace) -> None:
@@ -1180,6 +1186,123 @@ def jsonrpc_over_tcp(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _ws_client_frame(text: str) -> bytes:
+    payload = text.encode("utf-8")
+    mask = os.urandom(4)
+    header = bytearray([0x81])
+    n = len(payload)
+    if n < 126:
+        header.append(0x80 | n)
+    elif n < 65536:
+        header.append(0x80 | 126)
+        header.extend(n.to_bytes(2, "big"))
+    else:
+        header.append(0x80 | 127)
+        header.extend(n.to_bytes(8, "big"))
+    header.extend(mask)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    return bytes(header) + masked
+
+
+def _ws_decode_unmasked(buf: bytes) -> tuple[str | None, bytes]:
+    if len(buf) < 2:
+        return None, buf
+    n = buf[1] & 0x7F
+    idx = 2
+    if n == 126:
+        if len(buf) < 4:
+            return None, buf
+        n = int.from_bytes(buf[2:4], "big")
+        idx = 4
+    elif n == 127:
+        if len(buf) < 10:
+            return None, buf
+        n = int.from_bytes(buf[2:10], "big")
+        idx = 10
+    if buf[1] & 0x80:
+        if len(buf) < idx + 4 + n:
+            return None, buf
+        mask = buf[idx : idx + 4]
+        idx += 4
+        payload = bytes(buf[idx + i] ^ mask[i % 4] for i in range(n))
+        idx += n
+    else:
+        if len(buf) < idx + n:
+            return None, buf
+        payload = buf[idx : idx + n]
+        idx += n
+    opcode = buf[0] & 0x0F
+    if opcode == 0x1:
+        return payload.decode("utf-8"), buf[idx:]
+    return None, buf[idx:]
+
+
+def jsonrpc_over_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    import base64
+    import hashlib
+    import socket as sockmod
+
+    host, port = _codex_endpoint_host_port(endpoint)
+    path = "/"
+    rest = endpoint.strip()
+    if rest.lower().startswith("ws://"):
+        rest = rest[5:]
+    if "/" in rest:
+        path = "/" + rest.split("/", 1)[1]
+        if not path:
+            path = "/"
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    )
+    client = sockmod.socket(sockmod.AF_INET, sockmod.SOCK_STREAM)
+    try:
+        client.settimeout(2)
+        client.connect((host, port))
+        client.sendall(request.encode("ascii"))
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = client.recv(4096)
+            if not chunk:
+                raise OSError("websocket handshake closed")
+            buf += chunk
+        header, rest_buf = buf.split(b"\r\n\r\n", 1)
+        if b"101" not in header.split(b"\r\n", 1)[0]:
+            raise OSError("websocket handshake refused")
+        expected = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+        ).decode("ascii")
+        accept = ""
+        for line in header.decode("iso-8859-1").split("\r\n"):
+            if line.lower().startswith("sec-websocket-accept:"):
+                accept = line.split(":", 1)[1].strip()
+        if accept and accept != expected:
+            raise OSError("websocket accept mismatch")
+        client.sendall(_ws_client_frame(json.dumps(payload)))
+        buf = rest_buf
+        text = None
+        while text is None:
+            text, buf = _ws_decode_unmasked(buf)
+            if text is not None:
+                break
+            chunk = client.recv(4096)
+            if not chunk:
+                raise OSError("empty websocket reply")
+            buf += chunk
+    finally:
+        client.close()
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise OSError("app-server websocket reply was not an object")
+    return data
+
+
 def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | None:
     thread_id = str(bind.get("thread_id") or os.environ.get("SESSTALK_CODEX_THREAD_ID") or "").strip()
     endpoint = str(bind.get("app_server") or os.environ.get("SESSTALK_CODEX_APP_SERVER") or "").strip()
@@ -1205,7 +1328,10 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
         },
     }
     try:
-        reply = jsonrpc_over_tcp(endpoint, request)
+        if endpoint.lower().startswith("ws://"):
+            reply = jsonrpc_over_ws(endpoint, request)
+        else:
+            reply = jsonrpc_over_tcp(endpoint, request)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {
             "ok": False,

@@ -54,8 +54,7 @@ Do not invent wake APIs. Implement or document per vendor.
 
 Follow-ups after this loop (do not grow a chat product):
 
-- Codex `ws://` app-server transport (real `--listen`), still never spawn a second agent
-- `who` should show per-cwd `/as` names when a folder is ambiguous
+- Layer 4: one real Cursor + Claude or Codex pairing recorded on the epic (no LLM in CI)
 
 ## Anti-goals (reject PRs)
 

@@ -43,6 +43,117 @@ def _jsonl_server(got: list[dict]) -> tuple[str, threading.Thread, callable]:
     return f"tcp://127.0.0.1:{port}", thread, lambda: server.close()
 
 
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _ws_accept_key(key: str) -> str:
+    import base64
+    import hashlib
+
+    digest = hashlib.sha1((key + WS_GUID).encode("ascii")).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _ws_decode_client_frame(buf: bytes) -> tuple[str | None, bytes]:
+    if len(buf) < 2:
+        return None, buf
+    n = buf[1] & 0x7F
+    masked = bool(buf[1] & 0x80)
+    idx = 2
+    if n == 126:
+        if len(buf) < 4:
+            return None, buf
+        n = int.from_bytes(buf[2:4], "big")
+        idx = 4
+    elif n == 127:
+        if len(buf) < 10:
+            return None, buf
+        n = int.from_bytes(buf[2:10], "big")
+        idx = 10
+    if masked:
+        if len(buf) < idx + 4 + n:
+            return None, buf
+        mask = buf[idx : idx + 4]
+        idx += 4
+        payload = bytes(buf[idx + i] ^ mask[i % 4] for i in range(n))
+        idx += n
+    else:
+        if len(buf) < idx + n:
+            return None, buf
+        payload = buf[idx : idx + n]
+        idx += n
+    return payload.decode("utf-8"), buf[idx:]
+
+
+def _ws_encode_server_text(text: str) -> bytes:
+    payload = text.encode("utf-8")
+    header = bytearray([0x81])
+    n = len(payload)
+    if n < 126:
+        header.append(n)
+    elif n < 65536:
+        header.append(126)
+        header.extend(n.to_bytes(2, "big"))
+    else:
+        header.append(127)
+        header.extend(n.to_bytes(8, "big"))
+    return bytes(header) + payload
+
+
+def _ws_server(got: list[dict]) -> tuple[str, threading.Thread]:
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def serve() -> None:
+        try:
+            conn, _addr = server.accept()
+            with conn:
+                conn.settimeout(3)
+                buf = b""
+                while b"\r\n\r\n" not in buf:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        return
+                    buf += chunk
+                headers, rest = buf.split(b"\r\n\r\n", 1)
+                key = ""
+                for line in headers.decode("iso-8859-1").split("\r\n"):
+                    if line.lower().startswith("sec-websocket-key:"):
+                        key = line.split(":", 1)[1].strip()
+                accept = _ws_accept_key(key)
+                conn.sendall(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        "Upgrade: websocket\r\n"
+                        "Connection: Upgrade\r\n"
+                        f"Sec-WebSocket-Accept: {accept}\r\n"
+                        "\r\n"
+                    ).encode("ascii")
+                )
+                buf = rest
+                payload = None
+                while payload is None:
+                    payload, buf = _ws_decode_client_frame(buf)
+                    if payload is not None:
+                        break
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        return
+                    buf += chunk
+                got.append(json.loads(payload))
+                reply = json.dumps({"id": 1, "result": {"turn": {"id": "turn_ws"}}})
+                conn.sendall(_ws_encode_server_text(reply))
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return f"ws://127.0.0.1:{port}/", thread
+
+
 class CodexAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -88,6 +199,28 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(result["adapter"], "codex_app_server")
         self.assertEqual(got[0]["method"], "turn/start")
         self.assertEqual(got[0]["params"]["threadId"], "thr_live")
+
+    def test_fake_websocket_app_server_turn_start(self) -> None:
+        got: list[dict] = []
+        endpoint, thread = _ws_server(got)
+        run_cli(
+            self.home,
+            "bind",
+            "--name",
+            "codex",
+            "--vendor",
+            "codex",
+            "--thread-id",
+            "thr_ws",
+            "--app-server",
+            endpoint,
+        )
+        result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
+        thread.join(timeout=3)
+        self.assertEqual(result.get("attention"), "started_turn", result)
+        self.assertEqual(result["adapter"], "codex_app_server")
+        self.assertEqual(got[0]["method"], "turn/start")
+        self.assertEqual(got[0]["params"]["threadId"], "thr_ws")
 
     def test_nudge_does_not_spawn_codex_process(self) -> None:
         run_cli(

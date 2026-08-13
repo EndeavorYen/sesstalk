@@ -103,7 +103,7 @@ Same envelope on every host. What differs is **how you call it** and **whether w
 | CLI (`sesstalk` / `sesstalk.cmd`) | yes | yes | yes | yes |
 | MCP stdio (fast path) | `~/.cursor/mcp.json` | `~/.claude.json` | `~/.codex/config.toml` | use CLI |
 | Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
-| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + JSON-RPC `--app-server`; never spawn. Real Codex `ws://` listen is still a gap | no documented API |
+| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://` or `ws://`); never spawn a second agent | no documented API |
 | Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
 
 Nudge is honest:

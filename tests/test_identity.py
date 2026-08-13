@@ -60,3 +60,20 @@ class IdentityTests(unittest.TestCase):
             )
         )
         self.assertEqual(queued["message"]["from"], "cursor-b")
+
+    def test_who_warns_when_cwd_has_two_as_names(self) -> None:
+        ws = self.home / "shared"
+        ws.mkdir()
+        run_cli(self.home, "as", "cursor-a", cwd=ws)
+        run_cli(self.home, "as", "cursor-b", cwd=ws)
+        who = payload(run_cli(self.home, "who", cwd=ws))
+        self.assertEqual(sorted(who["identities"]), ["cursor-a", "cursor-b"])
+        self.assertIn("warning", who)
+
+    def test_who_has_no_warning_for_single_as(self) -> None:
+        ws = self.home / "solo"
+        ws.mkdir()
+        run_cli(self.home, "as", "cursor-a", cwd=ws)
+        who = payload(run_cli(self.home, "who", cwd=ws))
+        self.assertEqual(who["identities"], ["cursor-a"])
+        self.assertNotIn("warning", who)
