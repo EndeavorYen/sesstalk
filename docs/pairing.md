@@ -32,7 +32,7 @@ Keep at least one worker on `/receive` **or** finish a turn so the Stop/stop hoo
 5. Receivers: execute the text, `/reply pong from <name>`
 6. cursor-a `/receive --drain` — both pongs, same `thread` on the outbound copies
 7. `/claim src/auth.ts` on cursor-a; claude `/claim src/auth.ts` should fail
-8. Record the vendor pair in GitHub issue #11
+8. Record the vendor pair on GitHub issue [#12](https://github.com/EndeavorYen/sesstalk/issues/12)
 
 ## Failures
 

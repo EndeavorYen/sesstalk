@@ -1139,6 +1139,84 @@ def cmd_nudge(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_demo(args: argparse.Namespace) -> None:
+    import tempfile
+
+    previous = os.environ.get("SESSTALK_HOME")
+    with tempfile.TemporaryDirectory(prefix="sesstalk-demo-") as tmp:
+        os.environ["SESSTALK_HOME"] = tmp
+        try:
+            home = Path(tmp)
+            ensure_dirs(home)
+            fanout = queue_fanout(
+                home,
+                sender="cursor-a",
+                targets=["claude", "codex"],
+                text="please review src/auth.ts",
+                reply_to=None,
+                handoff=None,
+                paths=[],
+                meta={},
+                goal="Ship refresh-token rotation",
+                thread="auth-review",
+            )
+            inbound, offset = read_next(queue_path(home, "claude"), 0)
+            if inbound is None:
+                die("demo: expected unread mail for claude")
+            write_offset(cursor_path(home, "claude"), offset)
+            remember_inbound(home, "claude", inbound)
+            depth = resolve_depth(inbound, None)
+            reply = queue_message(
+                home,
+                sender="claude",
+                target="cursor-a",
+                text="looks good, next is tests",
+                reply_to=inbound.get("id"),
+                handoff=None,
+                paths=[],
+                meta={"kind": "reply"},
+                depth=depth,
+                thread=str(inbound.get("thread") or "auth-review"),
+                audience=["cursor-a"],
+            )
+            result = {
+                "ok": True,
+                "status": "demo",
+                "thread": "auth-review",
+                "fanout": fanout,
+                "received": inbound,
+                "reply": reply,
+            }
+            if args.json:
+                print(json.dumps(result), flush=True)
+                return
+            print("sesstalk demo (isolated mailbox, no LLM)\n", flush=True)
+            print("sesstalk send --from cursor-a --to claude --to codex --thread auth-review \\", flush=True)
+            print('    --goal "Ship refresh-token rotation" "please review src/auth.ts"\n', flush=True)
+            print(json.dumps({"status": "queued", "thread": "auth-review", "audience": ["claude", "codex"]}, indent=2), flush=True)
+            print("\nsesstalk receive --name claude", flush=True)
+            print(json.dumps({"status": "received", "to": inbound["to"], "thread": inbound["thread"]}, indent=2), flush=True)
+            print("\nsesstalk reply --from claude \"looks good, next is tests\"", flush=True)
+            print(
+                json.dumps(
+                    {
+                        "to": reply["to"],
+                        "thread": reply["thread"],
+                        "text": reply["text"],
+                        "provenance": reply["provenance"],
+                    },
+                    indent=2,
+                ),
+                flush=True,
+            )
+            print("\nNext: two real chats, unique /as names, keep /receive open.", flush=True)
+        finally:
+            if previous is None:
+                os.environ.pop("SESSTALK_HOME", None)
+            else:
+                os.environ["SESSTALK_HOME"] = previous
+
+
 def add_work_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--goal", default=None)
     parser.add_argument("--done", default=None)
@@ -1241,6 +1319,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp = sub.add_parser("mcp", help="Stdio MCP server (fast path)")
     mcp.set_defaults(func=cmd_mcp)
+
+    demo = sub.add_parser("demo", help="Reproduce the README story in an isolated mailbox")
+    demo.add_argument("--json", action="store_true")
+    demo.set_defaults(func=cmd_demo)
     return parser
 
 

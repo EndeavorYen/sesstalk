@@ -10,6 +10,7 @@ Not Slack for agents. Not another 20-tool MCP chat room. A JSONL inbox plus per-
 
 ```text
 python install.py --verify
+sesstalk demo
 ```
 
 Then in two chats:
@@ -29,7 +30,7 @@ Coding agents do not share a vendor. You already have Cursor in one window and C
 
 sesstalk is the missing **work envelope**: `goal`, `done`, `next`, `files`, `questions`, `thread`. Delivery is a local JSONL mailbox. Attention is a separate adapter. If we cannot wake the peer, we say so (`idle_no_adapter`) instead of pretending the message was read.
 
-If that sentence does not match a feature idea, the feature does not belong here.
+If that sentence does not match a feature idea, the feature does not belong here. Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Demo
 
@@ -82,9 +83,11 @@ $ sesstalk reply --from claude "looks good, next is tests"
 }
 ```
 
+Replay that story without two humans: `sesstalk demo` (or `sesstalk demo --json`). Isolated mailbox; no LLM.
+
 Round-trip on the mailbox is milliseconds. Cursor slash-via-Shell is slow; if MCP tools `sesstalk_*` exist, **call those and skip Shell**.
 
-Three-window live recipe: [`docs/pairing.md`](docs/pairing.md).
+Three-window live recipe: [`docs/pairing.md`](docs/pairing.md). Contribute: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Interop
 
@@ -181,6 +184,8 @@ Unix:
 ~/.sesstalk/sesstalk send --from claude --to cursor hello
 ~/.sesstalk/sesstalk receive --name cursor --timeout 300
 ```
+
+`sesstalk demo` / `sesstalk demo --json` replays the README story in a throwaway mailbox (does not write `~/.sesstalk`).
 
 `receive` drains **unread** mail by default. `--live` waits only for mail sent after it starts. `--timeout 0` waits forever. Exit `2` is timeout. Names: `[a-z0-9][a-z0-9_-]{0,63}`.
 
