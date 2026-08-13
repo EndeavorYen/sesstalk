@@ -85,6 +85,10 @@ $ sesstalk reply --from claude "looks good, next is tests"
 
 Replay that story without two humans: `sesstalk demo` (or `sesstalk demo --json`). Isolated mailbox; no LLM.
 
+![sesstalk demo terminal recording](docs/demo.svg)
+
+Regenerate the recording (no LLM): `python scripts/record_demo.py`. Tape: [`docs/demo.cast`](docs/demo.cast) / [`docs/demo.txt`](docs/demo.txt).
+
 Round-trip on the mailbox is milliseconds. Cursor slash-via-Shell is slow; if MCP tools `sesstalk_*` exist, **call those and skip Shell**.
 
 Three-window live recipe: [`docs/pairing.md`](docs/pairing.md). Contribute: [`CONTRIBUTING.md`](CONTRIBUTING.md).
@@ -99,7 +103,7 @@ Same envelope on every host. What differs is **how you call it** and **whether w
 | CLI (`sesstalk` / `sesstalk.cmd`) | yes | yes | yes | yes |
 | MCP stdio (fast path) | `~/.cursor/mcp.json` | `~/.claude.json` | `~/.codex/config.toml` | use CLI |
 | Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
-| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket; not native Windows | needs live app-server `threadId` | no documented API |
+| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + JSON-RPC `--app-server`; never spawn. Real Codex `ws://` listen is still a gap | no documented API |
 | Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
 
 Nudge is honest:

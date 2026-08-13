@@ -174,6 +174,23 @@ def save_state(home: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def cwd_key(cwd: str | None = None) -> str:
+    path = _resolved_path(cwd or os.getcwd())
+    return str(path) if path else str(cwd or os.getcwd())
+
+
+def cwd_identity_names(home: Path, cwd: str | None = None) -> list[str]:
+    identities = load_state(home).get("identities")
+    if not isinstance(identities, dict):
+        return []
+    raw = identities.get(cwd_key(cwd))
+    if isinstance(raw, list):
+        return [normalize_name(str(item)) for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [normalize_name(raw)]
+    return []
+
+
 def identity_name(home: Path, explicit: str | None) -> str:
     if explicit:
         return normalize_name(explicit)
@@ -181,9 +198,9 @@ def identity_name(home: Path, explicit: str | None) -> str:
         env = os.environ.get(key, "").strip()
         if env:
             return normalize_name(env)
-    stored = str(load_state(home).get("identity") or "").strip()
-    if stored:
-        return normalize_name(stored)
+    names = cwd_identity_names(home)
+    if len(names) == 1:
+        return names[0]
     return ""
 
 
@@ -239,10 +256,20 @@ def resolve_hook_name(home: Path, explicit: str | None, event: dict[str, Any]) -
     return inbox_for_cwd(home, hook_cwd_from_event(event))
 
 
-def set_identity(home: Path, name: str) -> None:
+def set_identity(home: Path, name: str) -> list[str]:
     data = load_state(home)
+    identities = data.get("identities")
+    if not isinstance(identities, dict):
+        identities = {}
+    key = cwd_key()
+    names = cwd_identity_names(home)
+    if name not in names:
+        names.append(name)
+    identities[key] = names
+    data["identities"] = identities
     data["identity"] = name
     save_state(home, data)
+    return names
 
 
 def last_inbound_path(home: Path, name: str) -> Path:
@@ -254,8 +281,6 @@ def remember_inbound(home: Path, inbox: str, message: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(message, indent=2) + "\n", encoding="utf-8")
     data = load_state(home)
-    if not data.get("identity"):
-        data["identity"] = inbox
     data["last_inbox"] = inbox
     save_state(home, data)
 
@@ -498,7 +523,12 @@ def remainder_text(value: Any) -> str:
 def cmd_send(args: argparse.Namespace) -> None:
     home = bus_home()
     ensure_dirs(home)
-    sender = identity_name(home, args.sender) or "anonymous"
+    sender = identity_name(home, args.sender)
+    if not sender:
+        names = cwd_identity_names(home)
+        if len(names) > 1:
+            die("pass --from; this directory has multiple /as names: " + ", ".join(names))
+        die("pass --from or run as <name> in this directory")
     targets = parse_targets(args.to)
     text = remainder_text(args.text)
     notes: list[str] = []
@@ -534,8 +564,17 @@ def cmd_as(args: argparse.Namespace) -> None:
     home = bus_home()
     ensure_dirs(home)
     name = normalize_name(args.name)
-    set_identity(home, name)
-    print(json.dumps({"ok": True, "status": "identity", "name": name}), flush=True)
+    names = set_identity(home, name)
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": "identity",
+        "name": name,
+        "cwd": cwd_key(),
+    }
+    if len(names) > 1:
+        result["names"] = names
+        result["warning"] = "this directory has multiple /as names; pass --from"
+    print(json.dumps(result), flush=True)
 
 
 def cmd_reply(args: argparse.Namespace) -> None:
@@ -977,11 +1016,14 @@ def cmd_bind(args: argparse.Namespace) -> None:
     if vendor != "unknown" and vendor not in VENDORS:
         die(f"vendor must be one of {', '.join(VENDORS)}")
     binds = load_binds(home)
+    prev = binds.get(name) if isinstance(binds.get(name), dict) else {}
     binds[name] = {
         "name": name,
         "vendor": vendor,
         "hook": True,
-        "socket": args.socket,
+        "socket": args.socket if args.socket is not None else prev.get("socket"),
+        "thread_id": getattr(args, "thread_id", None) or prev.get("thread_id"),
+        "app_server": getattr(args, "app_server", None) or prev.get("app_server"),
         "cwd": os.getcwd(),
         "updated_at": now_iso(),
     }
@@ -1100,6 +1142,94 @@ def try_claude_socket(socket_path: str, text: str) -> dict[str, Any] | None:
         }
 
 
+def _codex_endpoint_host_port(endpoint: str) -> tuple[str, int]:
+    raw = endpoint.strip()
+    for prefix in ("tcp://", "ws://", "http://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    raw = raw.split("/", 1)[0]
+    if ":" not in raw:
+        raise OSError("app-server endpoint must be host:port")
+    host, port_s = raw.rsplit(":", 1)
+    return host or "127.0.0.1", int(port_s)
+
+
+def jsonrpc_over_tcp(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    import socket as sockmod
+
+    host, port = _codex_endpoint_host_port(endpoint)
+    client = sockmod.socket(sockmod.AF_INET, sockmod.SOCK_STREAM)
+    try:
+        client.settimeout(2)
+        client.connect((host, port))
+        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        buf = b""
+        while b"\n" not in buf:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        client.close()
+    if not buf.strip():
+        raise OSError("empty app-server reply")
+    data = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
+    if not isinstance(data, dict):
+        raise OSError("app-server reply was not an object")
+    return data
+
+
+def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | None:
+    thread_id = str(bind.get("thread_id") or os.environ.get("SESSTALK_CODEX_THREAD_ID") or "").strip()
+    endpoint = str(bind.get("app_server") or os.environ.get("SESSTALK_CODEX_APP_SERVER") or "").strip()
+    if not thread_id and not endpoint:
+        return None
+    if not thread_id or not endpoint:
+        return {
+            "ok": True,
+            "status": "queued",
+            "attention": "idle_no_adapter",
+            "blocker": (
+                "Codex turn/start needs a live app-server (--app-server tcp://127.0.0.1:PORT) "
+                "plus --thread-id; sesstalk will not spawn a second Codex agent"
+            ),
+            "adapter": "codex_app_server",
+        }
+    request = {
+        "method": "turn/start",
+        "id": 1,
+        "params": {
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": text[:2000]}],
+        },
+    }
+    try:
+        reply = jsonrpc_over_tcp(endpoint, request)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "attention": "error",
+            "error": f"codex app-server: {exc}",
+            "adapter": "codex_app_server",
+        }
+    if reply.get("error"):
+        return {
+            "ok": False,
+            "status": "error",
+            "attention": "error",
+            "error": str(reply.get("error")),
+            "adapter": "codex_app_server",
+        }
+    return {
+        "ok": True,
+        "status": "started_turn",
+        "attention": "started_turn",
+        "adapter": "codex_app_server",
+    }
+
+
 def run_nudge(home: Path, name: str, vendor: str) -> dict[str, Any]:
     info = presence_entry(home, name)
     if info["state"] == "listening":
@@ -1143,6 +1273,13 @@ def run_nudge(home: Path, name: str, vendor: str) -> dict[str, Any]:
     socket_path = str(bind.get("socket") or os.environ.get("SESSTALK_CLAUDE_SOCKET") or "")
     if vendor == "claude" and socket_path:
         result = try_claude_socket(socket_path, hook_continue_text(unread_preview(home, [name])))
+        if result:
+            result["name"] = name
+            result["vendor"] = vendor
+            result["unread"] = info["unread"]
+            return result
+    if vendor == "codex":
+        result = try_codex_turn_start(bind, hook_continue_text(unread_preview(home, [name])))
         if result:
             result["name"] = name
             result["vendor"] = vendor
@@ -1362,6 +1499,8 @@ def build_parser() -> argparse.ArgumentParser:
     bind.add_argument("--name", required=True)
     bind.add_argument("--vendor", default="unknown")
     bind.add_argument("--socket", default=None)
+    bind.add_argument("--thread-id", dest="thread_id", default=None)
+    bind.add_argument("--app-server", dest="app_server", default=None)
     bind.set_defaults(func=cmd_bind)
 
     hook = sub.add_parser("hook", help="Vendor Stop/stop hook: continue if unread mail")
@@ -1488,7 +1627,7 @@ def _mcp_tools() -> list[dict[str, Any]]:
             (
                 "sesstalk_bind",
                 "Remember this inbox's vendor so nudge can use the Stop/stop hook.",
-                {"name": string, "vendor": string},
+                {"name": string, "vendor": string, "socket": string, "thread_id": string, "app_server": string},
                 ["name"],
             ),
         ]
@@ -1585,8 +1724,15 @@ def _mcp_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if arguments.get("sender"):
             extra += ["--from", str(arguments["sender"])]
         extra += ["--path", str(arguments.get("path") or "")]
-    elif name == "sesstalk_bind" and arguments.get("vendor"):
-        extra += ["--vendor", str(arguments["vendor"])]
+    elif name == "sesstalk_bind":
+        if arguments.get("vendor"):
+            extra += ["--vendor", str(arguments["vendor"])]
+        if arguments.get("socket"):
+            extra += ["--socket", str(arguments["socket"])]
+        if arguments.get("thread_id"):
+            extra += ["--thread-id", str(arguments["thread_id"])]
+        if arguments.get("app_server"):
+            extra += ["--app-server", str(arguments["app_server"])]
     ns = parser.parse_args(argv + extra)
     if ns.cmd in {"send", "reply"}:
         ns.text = " ".join(ns.text).strip() if isinstance(ns.text, list) else (ns.text or "")

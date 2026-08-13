@@ -35,15 +35,15 @@ Not Slack. Not a cloud bus. Not 20 MCP chat tools.
 
 Strangers must *see* the value without two humans and an LLM.
 
-- [#13](https://github.com/EndeavorYen/sesstalk/issues/13) `sesstalk demo`
+- [#13](https://github.com/EndeavorYen/sesstalk/issues/13) `sesstalk demo` — done
 - [#14](https://github.com/EndeavorYen/sesstalk/issues/14) Recorded terminal demo
-- [#15](https://github.com/EndeavorYen/sesstalk/issues/15) CONTRIBUTING + north-star checklist
+- [#15](https://github.com/EndeavorYen/sesstalk/issues/15) CONTRIBUTING + north-star checklist — done
 
 ### v0.6 Attention where the host allows
 
 Do not invent wake APIs. Implement or document per vendor.
 
-- [#16](https://github.com/EndeavorYen/sesstalk/issues/16) Hook maps cwd → bound inbox
+- [#16](https://github.com/EndeavorYen/sesstalk/issues/16) Hook maps cwd → bound inbox — done
 - [#17](https://github.com/EndeavorYen/sesstalk/issues/17) Claude UDS wake (fake socket, skip Windows)
 - [#18](https://github.com/EndeavorYen/sesstalk/issues/18) Codex `bind --thread-id` / honest fail
 
@@ -51,6 +51,11 @@ Do not invent wake APIs. Implement or document per vendor.
 
 - [#19](https://github.com/EndeavorYen/sesstalk/issues/19) Two Cursor chats must not clobber `--from`
 - [#12](https://github.com/EndeavorYen/sesstalk/issues/12) Epic: close when the milestones above are done and the README interop table is still true
+
+Follow-ups after this loop (do not grow a chat product):
+
+- Codex `ws://` app-server transport (real `--listen`), still never spawn a second agent
+- `who` should show per-cwd `/as` names when a folder is ambiguous
 
 ## Anti-goals (reject PRs)
 

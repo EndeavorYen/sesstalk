@@ -13,6 +13,8 @@ If MCP tool `sesstalk_bind` is available, call it now. Do not use Shell.
 
 ```text
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" bind --name <this-chat-name> --vendor cursor
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" bind --name claude --vendor claude --socket /tmp/claude.sock
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" bind --name codex --vendor codex --thread-id thr_... --app-server tcp://127.0.0.1:PORT
 ```
 
 After bind, `/nudge` reports `hook_armed` instead of pretending a turn started. The peer still needs a Stop/stop hook (installed by `python install.py`) or an open `/receive`.

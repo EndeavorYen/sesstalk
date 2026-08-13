@@ -1,0 +1,34 @@
+sesstalk demo (isolated mailbox, no LLM)
+
+sesstalk send --from cursor-a --to claude --to codex --thread auth-review \
+    --goal "Ship refresh-token rotation" "please review src/auth.ts"
+
+{
+  "status": "queued",
+  "thread": "auth-review",
+  "audience": [
+    "claude",
+    "codex"
+  ]
+}
+
+sesstalk receive --name claude
+{
+  "status": "received",
+  "to": "claude",
+  "thread": "auth-review"
+}
+
+sesstalk reply --from claude "looks good, next is tests"
+{
+  "to": "cursor-a",
+  "thread": "auth-review",
+  "text": "looks good, next is tests",
+  "provenance": {
+    "peer": "claude",
+    "untrusted": true,
+    "depth": 1
+  }
+}
+
+Next: two real chats, unique /as names, keep /receive open.

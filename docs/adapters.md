@@ -22,13 +22,20 @@ Real adapter on Windows: `~/.cursor/hooks.json` `stop` hook runs `sesstalk hook 
 
 ### Claude Code
 
-Native `SendMessage` / inbox sockets are **macOS and Linux** (Unix domain). Native Windows: `idle_no_adapter` with that blocker unless you pass `bind --socket` / `SESSTALK_CLAUDE_SOCKET` to a reachable UDS (WSL).
+Native `SendMessage` / inbox sockets are **macOS and Linux** (Unix domain). Layer 1: `bind --socket` + a fake AF_UNIX server; nudge returns `started_turn` / `adapter: claude_socket`. Native Windows: `idle_no_adapter` (Unix-domain sockets are not the Windows path; use WSL or the Stop hook). Never claim `started_turn` if connect failed.
 
 Portable adapter: Stop hook in `~/.claude/settings.json` → `sesstalk hook --vendor claude` returns `decision: block` once (`stop_hook_active` prevents loops).
 
 ### Codex
 
-`turn/start` requires an app-server `threadId` for that live TUI/IDE session. sesstalk does not invent a thread or spawn a second agent.
+`turn/start` requires the **live** session `threadId` and a listening app-server. sesstalk does not invent a thread or spawn a second `codex` process.
+
+```text
+sesstalk bind --name codex --vendor codex --thread-id thr_... --app-server tcp://127.0.0.1:PORT
+sesstalk nudge --name codex --vendor codex
+```
+
+No endpoint: `idle_no_adapter` (will not spawn). Connect/RPC fail: `error`. Success: `started_turn` / `adapter: codex_app_server`. Layer 1 talks newline JSON-RPC (`turn/start`). Real Codex `--listen ws://` is a follow-up transport; do not start `codex app-server` from nudge.
 
 Portable adapter: `~/.codex/hooks.json` Stop hook → `sesstalk hook --vendor codex` (same JSON as Claude).
 

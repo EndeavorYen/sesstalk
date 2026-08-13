@@ -25,7 +25,7 @@ This is how agents pass work, not a chat room.
 7. `/claim src/auth.ts` before you edit; do not touch a path `/who` lists as another peer's lease. `/release` when done.
 8. `/bind --vendor cursor` (or claude/codex). `/nudge` then returns `hook_armed` if a Stop/stop hook can continue a finishing turn. Already idle at the prompt is still idle.
 
-Do not hardcode `--from cursor`. Two Cursor chats must use different names.
+Do not hardcode `--from cursor`. Two Cursor chats must use different names. `/as` is per working directory; two names in the **same** folder require `--from` / `SESSTALK_NAME`.
 
 Handoff **requires** `--goal`. Do not dump an essay into `text`.
 
