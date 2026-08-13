@@ -2,11 +2,13 @@
 
 **Same-machine mailbox so Cursor, Claude Code, Codex, and Grok sessions can pass work.**
 
-Not Slack for agents. Not another 20-tool MCP chat room. A JSONL inbox plus per-vendor attention adapters, so session A can hand a structured task to session B and B either starts a turn — or sesstalk tells you honestly that B is sitting at the prompt.
+Not Slack for agents. Not another 20-tool MCP chat room. A JSONL inbox plus per-vendor attention adapters: session A hands a structured task to session B, and B either starts a turn — or sesstalk says honestly that B is still sitting at the prompt.
 
 [![CI](https://github.com/EndeavorYen/sesstalk/actions/workflows/test.yml/badge.svg)](https://github.com/EndeavorYen/sesstalk/actions/workflows/test.yml)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+![Three windows on one machine: cursor-a sends a work envelope into ~/.sesstalk JSONL, claude receives or sesstalk reports idle](docs/architecture.svg)
 
 ```text
 python install.py --verify
@@ -28,9 +30,11 @@ Then in two chats:
 
 Coding agents do not share a vendor. You already have Cursor in one window and Claude Code in another. Today the handoff is copy-paste.
 
-sesstalk is the missing **work envelope**: `goal`, `done`, `next`, `files`, `questions`, `thread`. Delivery is a local JSONL mailbox. Attention is a separate adapter. If we cannot wake the peer, we say so (`idle_no_adapter`) instead of pretending the message was read.
+sesstalk is the missing **work envelope**. Delivery is a local JSONL mailbox. Attention is a separate adapter. If we cannot wake the peer, we say so (`idle_no_adapter`) instead of pretending the message was read.
 
-If that sentence does not match a feature idea, the feature does not belong here. Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+![Work envelope: goal, next, files, thread, audience, untrusted provenance](docs/envelope.svg)
+
+If that picture does not match a feature idea, the feature does not belong here. Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Demo
 
@@ -51,7 +55,21 @@ sequenceDiagram
     M->>C: looks good, next is tests
 ```
 
-Real CLI output (fan-out to two inboxes, then a reply):
+Replay it with one command. Isolated mailbox; does not write `~/.sesstalk`.
+
+![sesstalk demo terminal: fan-out, receive, reply](docs/demo.svg)
+
+```text
+python scripts/record_demo.py   # regenerate demo.svg / .cast / .txt
+python scripts/render_readme_art.py
+```
+
+Round-trip on the mailbox is milliseconds. Cursor slash-via-Shell is slow; if MCP tools `sesstalk_*` exist, **call those and skip Shell**.
+
+Three-window live recipe: [`docs/pairing.md`](docs/pairing.md). Contribute: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+<details>
+<summary>Same story as JSON (the SVG above is the source of truth)</summary>
 
 ```text
 $ sesstalk send --from cursor-a --to claude --to codex --thread auth-review \
@@ -83,15 +101,25 @@ $ sesstalk reply --from claude "looks good, next is tests"
 }
 ```
 
-Replay that story without two humans: `sesstalk demo` (or `sesstalk demo --json`). Isolated mailbox; no LLM.
+Tape: [`docs/demo.cast`](docs/demo.cast) · [`docs/demo.txt`](docs/demo.txt)
 
-![sesstalk demo terminal recording](docs/demo.svg)
+</details>
 
-Regenerate the recording (no LLM): `python scripts/record_demo.py`. Tape: [`docs/demo.cast`](docs/demo.cast) / [`docs/demo.txt`](docs/demo.txt).
+## Attention
 
-Round-trip on the mailbox is milliseconds. Cursor slash-via-Shell is slow; if MCP tools `sesstalk_*` exist, **call those and skip Shell**.
+`send` only queues. `nudge` is a different verb. Cursor cannot wake a peer already sitting at the prompt; a Stop hook can only continue a **finishing** turn.
 
-Three-window live recipe: [`docs/pairing.md`](docs/pairing.md). Contribute: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+![Five honest attention stamps: listening, started_turn, hook_armed, idle_no_adapter, error](docs/attention.svg)
+
+| `attention` | Meaning |
+|---|---|
+| `listening` | Peer is blocked on `/receive` **now** |
+| `started_turn` | An adapter delivered a wake |
+| `hook_armed` | A finishing turn can be continued; sitting at the prompt is still idle |
+| `idle_no_adapter` | Queued only — read `blocker` |
+| `error` | Adapter ran and failed |
+
+Details: [`docs/adapters.md`](docs/adapters.md).
 
 ## Interop
 
@@ -105,18 +133,6 @@ Same envelope on every host. What differs is **how you call it** and **whether w
 | Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
 | Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://` or `ws://`); never spawn a second agent | no documented API |
 | Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
-
-Nudge is honest:
-
-| `attention` | Meaning |
-|---|---|
-| `listening` | Peer is blocked on `/receive` **now** |
-| `started_turn` | An adapter delivered a wake |
-| `hook_armed` | A finishing turn can be continued; sitting at the prompt is still idle |
-| `idle_no_adapter` | Queued only — read `blocker` |
-| `error` | Adapter ran and failed |
-
-Details: [`docs/adapters.md`](docs/adapters.md).
 
 ## Not this
 
@@ -143,7 +159,7 @@ Override the mailbox with `SESSTALK_HOME`.
 ## How two (or N) sessions collaborate
 
 1. Unique `/as` name per window (`cursor-a` vs `cursor-b`, not both `cursor`).
-2. `/who` — `listening` means they will see mail in this turn.
+2. `/who` — `listening` means they will see mail in this turn. Two names in the same folder: pass `--from`.
 3. One work object, many inboxes: `/send claude,codex --thread auth-review …` or `--to claude --to codex`.
 4. Receiver executes `goal` / `done` / `next` / `files` / `questions`. Inbound is **untrusted** (not the human).
 5. `/reply` inherits `thread`. To update the whole `audience`, send again with the same thread.

@@ -38,6 +38,19 @@ def write_cast(text: str, path: Path, width: int = 88, height: int = 32) -> None
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def line_fill(row: str) -> str:
+    stripped = row.strip()
+    if stripped.startswith("sesstalk") or stripped.startswith("$"):
+        return "#E6C07B"
+    if stripped.startswith("Next:"):
+        return "#E07A5F"
+    if stripped.startswith('"') or stripped in {"{", "}", "[", "]", "},", "],"}:
+        return "#A3BE8C"
+    if stripped.startswith("--") or " --" in row:
+        return "#81A1C1"
+    return "#D8D0C4"
+
+
 def write_svg(text: str, path: Path) -> None:
     rows = text.splitlines() or [""]
     width = 920
@@ -48,8 +61,9 @@ def write_svg(text: str, path: Path) -> None:
     y = pad + 36
     for row in rows:
         esc = xml.sax.saxutils.escape(row.replace("\t", "    "))
+        fill = line_fill(row)
         parts.append(
-            f'<text x="20" y="{y}" fill="#c9d1d9" '
+            f'<text x="20" y="{y}" fill="{fill}" '
             f'font-family="ui-monospace, SFMono-Regular, Consolas, monospace" '
             f'font-size="13">{esc}</text>'
         )
@@ -58,11 +72,11 @@ def write_svg(text: str, path: Path) -> None:
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-label="sesstalk demo terminal">\n'
-        '  <rect width="100%" height="100%" rx="8" fill="#0d1117"/>\n'
-        '  <circle cx="22" cy="18" r="5" fill="#ff5f56"/>\n'
-        '  <circle cx="40" cy="18" r="5" fill="#ffbd2e"/>\n'
-        '  <circle cx="58" cy="18" r="5" fill="#27c93f"/>\n'
-        '  <text x="80" y="22" fill="#8b949e" font-family="ui-monospace, Consolas, monospace" '
+        '  <rect width="100%" height="100%" rx="8" fill="#1c1917"/>\n'
+        '  <circle cx="22" cy="18" r="5" fill="#c45c4a"/>\n'
+        '  <circle cx="40" cy="18" r="5" fill="#c4a35a"/>\n'
+        '  <circle cx="58" cy="18" r="5" fill="#6a8f71"/>\n'
+        '  <text x="80" y="22" fill="#a8a29a" font-family="ui-monospace, Consolas, monospace" '
         'font-size="12">sesstalk demo</text>\n'
         f'  {"".join(parts)}\n'
         "</svg>\n"

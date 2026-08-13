@@ -80,3 +80,37 @@ class DemoTests(unittest.TestCase):
         self.assertIn("auth-review", (out / "demo.svg").read_text(encoding="utf-8"))
         self.assertTrue((out / "demo.cast").is_file())
 
+    def test_readme_art_svgs_name_the_product(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        arch = (root / "docs" / "architecture.svg").read_text(encoding="utf-8")
+        env = (root / "docs" / "envelope.svg").read_text(encoding="utf-8")
+        att = (root / "docs" / "attention.svg").read_text(encoding="utf-8")
+        self.assertIn("cursor-a", arch)
+        self.assertIn("JSONL", arch)
+        self.assertIn("claude", arch)
+        self.assertIn("goal", env)
+        self.assertIn("untrusted", env)
+        self.assertIn("listening", att)
+        self.assertIn("idle_no_adapter", att)
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("docs/architecture.svg", readme)
+        self.assertIn("docs/envelope.svg", readme)
+        self.assertIn("docs/attention.svg", readme)
+        self.assertIn("docs/demo.svg", readme)
+
+    def test_render_readme_art_regenerates(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts" / "render_readme_art.py"
+        out = Path(self.temp.name) / "art"
+        import subprocess
+
+        subprocess.run(
+            [sys.executable, "-S", str(script), "--out", str(out)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertTrue((out / "architecture.svg").is_file())
+        self.assertIn("auth-review", (out / "architecture.svg").read_text(encoding="utf-8"))
+
+
