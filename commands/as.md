@@ -15,4 +15,4 @@ Remember `<this-session-name>` as this chat's mailbox.
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" as <this-session-name>
 ```
 
-Print the JSON. Later `/send`, `/reply`, `/handoff`, and `/receive` use this name as `--from` / inbox.
+Print the JSON. Later `/send`, `/reply`, `/handoff`, `/receive`, and `/nudge` use this name as `--from` / inbox.

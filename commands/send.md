@@ -15,4 +15,4 @@ This session must already have a name from `/as` or `/receive` in this chat. Rem
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" send --from <this-chat-name> --to <target-name> <text>
 ```
 
-Print the JSON. This only queues; it does not wake a prompt-idle session.
+Print the JSON. This only queues; it does not wake a prompt-idle session. Use `/nudge` separately if the peer may be idle. Prefer MCP tool `sesstalk_send` when available.

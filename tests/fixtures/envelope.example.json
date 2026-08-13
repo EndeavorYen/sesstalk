@@ -1,0 +1,17 @@
+{
+  "id": "00000000-0000-0000-0000-000000000001",
+  "ts": "2026-08-13T17:00:00.000Z",
+  "from": "cursor-a",
+  "to": "cursor-b",
+  "reply_to": null,
+  "text": "please continue",
+  "handoff": "checkpoint 4, next is auth",
+  "goal": "Ship auth without breaking JWT tenant_id",
+  "done": "Tests green on session-a",
+  "next": "Add refresh-token rotation",
+  "questions": ["Is bcrypt 5 required?"],
+  "paths": ["src/auth.ts"],
+  "files": ["src/auth.ts"],
+  "meta": { "kind": "handoff" },
+  "provenance": { "peer": "cursor-a", "untrusted": true, "depth": 0 }
+}

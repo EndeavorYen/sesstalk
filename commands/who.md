@@ -1,5 +1,5 @@
 ---
-description: List sesstalk sessions and queues
+description: Show which sessions are listening, idle, or unknown
 ---
 
 # /who
@@ -7,7 +7,7 @@ description: List sesstalk sessions and queues
 Run immediately. Do not read SKILL.md.
 
 ```text
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" list
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" who
 ```
 
-Show who is registered and which inboxes exist.
+Print name, state (`listening` / `idle` / `unknown`), unread count, and last activity. `listening` means a `receive` is in progress now. Prefer MCP tool `sesstalk_who` when available.

@@ -10,6 +10,7 @@ Thumbs.db
 *.lock
 queues/
 cursors/
+listeners/
 last/
 sessions.json
 state.json

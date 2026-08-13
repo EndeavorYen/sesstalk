@@ -1,5 +1,5 @@
 ---
-description: List sesstalk sessions and queues
+description: Alias for /who (listening vs idle vs unknown)
 ---
 
 # /list-bus
@@ -7,5 +7,5 @@ description: List sesstalk sessions and queues
 Alias for `/who`. Run immediately. Do not read SKILL.md.
 
 ```text
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" list
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" who
 ```
