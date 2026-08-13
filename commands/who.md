@@ -6,6 +6,8 @@ description: Show which sessions are listening, idle, or unknown
 
 Run immediately. Do not read SKILL.md.
 
+If MCP tool `sesstalk_who` is available, call it now. Do not use Shell.
+
 ```text
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" who
 ```

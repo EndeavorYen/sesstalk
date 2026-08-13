@@ -32,9 +32,10 @@ Each chat picks a name, then talks:
 
 ```text
 /as cursor-a
-/send cursor-b please review auth
+/send claude,codex please review auth
 /handoff cursor-b --goal "ship auth" --next "rotate tokens" --file HANDOFF.md
 /receive cursor-a
+/peek cursor-a
 /reply lgtm, tests next
 /who
 /nudge cursor-b --vendor cursor
@@ -43,16 +44,27 @@ Each chat picks a name, then talks:
 | Command | What it does |
 |---|---|
 | `/as <name>` | Name this chat's inbox |
-| `/send <peer> <text>` | Queue a message (does not wake a prompt-idle peer) |
-| `/handoff <peer> --goal ...` | Structured work object; `--goal` is required |
-| `/receive [name]` | Block until the next unread message |
-| `/reply <text>` | Reply to the last inbound sender |
+| `/send <peer[,peer]> <text>` | Queue a message to one or more inboxes (does not wake them) |
+| `/handoff <peer[,peer]> --goal ...` | Structured work object; `--goal` is required |
+| `/receive [name]` | Block until the next unread message (`--drain` takes the backlog) |
+| `/peek [name]` | Look at next unread mail without consuming it |
+| `/reply <text>` | Reply to the last inbound sender (inherits `thread`) |
 | `/who` | `listening` / `idle` / `unknown` plus unread (`/list-bus` alias) |
 | `/nudge <peer>` | Best-effort wake; distinct from `/send` |
 
 Two Cursor chats need two names (`cursor-a`, `cursor-b`). Always pass `--from` / `--name` from this chat's `/as`.
 
-If MCP tools `sesstalk_send` / `sesstalk_receive` / … are available, use those instead of Shell. Same mailbox, lower spawn cost.
+If MCP tools `sesstalk_*` are available, **call them and do not use Shell**. Same mailbox, much lower spawn cost.
+
+## Collaborate
+
+Each session is an inbox, not a chat room.
+
+1. Unique `/as` names on every vendor window
+2. `/who` — send when the peer is `listening`, or queue + `/nudge` if `idle`
+3. Fan-out one work object: `--to claude --to codex` (or `--to claude,codex`). Copies share `thread` and `audience`
+4. Keep `--thread auth-review` for a task. `/reply` inherits it. To update the whole group, `send --to` the rest of `audience` with the same thread
+5. The worker stays on `/receive`. `/peek` does not consume. `/receive --drain` empties a backlog without waiting
 
 ## CLI
 
@@ -60,8 +72,10 @@ Windows:
 
 ```text
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" as cursor-a
-"%USERPROFILE%\.sesstalk\sesstalk.cmd" send --from cursor-a --to cursor-b hello
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" send --from cursor-a --to claude --to codex --thread auth-review hello
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" receive --name cursor-b --timeout 300
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" receive --name cursor-b --drain
+"%USERPROFILE%\.sesstalk\sesstalk.cmd" peek --name cursor-b
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" reply --from cursor-b pong
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" handoff --from cursor-a --to cursor-b --goal "finish tests" --next "run CI" --note "tokens next"
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" who
@@ -75,7 +89,7 @@ Unix:
 ~/.sesstalk/sesstalk receive --name cursor --timeout 300
 ```
 
-`receive` reads **unread** mail by default (send-first still works). `--live` waits only for messages sent after receive starts; a timeout does not discard unread mail. `--timeout 0` waits forever. Exit `2` is timeout.
+`receive` reads **unread** mail by default (send-first still works). `--drain` returns every waiting message immediately (`status: drained`) and does not block. `--live` waits only for messages sent after receive starts; a timeout does not discard unread mail. `--timeout 0` waits forever. Exit `2` is timeout.
 
 Names: `[a-z0-9][a-z0-9_-]{0,63}`.
 
@@ -86,6 +100,7 @@ Each queued line is JSON. Unknown keys are allowed only inside `meta`.
 - `text` — short instruction
 - `handoff` — working note (inline `--note` or `--file`, max 200KB; prefer `files[]` for large notes)
 - `goal` / `done` / `next` / `questions[]` / `files[]` (`paths[]` is the same list)
+- `thread` / `audience[]` — shared task id and who else received this fan-out
 - `provenance` — `{peer, untrusted: true, depth}`
 - `from` / `to` / `reply_to` / `id` / `ts` / `meta`
 

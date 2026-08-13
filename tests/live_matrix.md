@@ -18,4 +18,5 @@ Checks per cell:
 3. receive-first then send
 4. handoff `--goal` round-trip
 5. `/who` shows `listening` during receive
-6. `/nudge` is honest (`started_turn` or `idle_no_adapter` / `error`)
+7. Fan-out `--to a --to b` shares `thread`
+8. `/peek` does not consume; `--drain` empties a backlog

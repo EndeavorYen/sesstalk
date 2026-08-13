@@ -9,6 +9,8 @@ User arguments: $ARGUMENTS
 
 Run immediately. Do not read SKILL.md.
 
+If MCP tool `sesstalk_handoff` is available, call it now with `sender`, `to` (comma-separated peers allowed), and required `goal`. Do not use Shell.
+
 Remember this chat's mailbox name from `/as`. Always pass `--from`. `--goal` is required.
 
 Parse `$ARGUMENTS`: first token is `<target-name>`. Pass through `--goal`, `--done`, `--next`, `--question`, `--file`, `--path`, `--note` if present.

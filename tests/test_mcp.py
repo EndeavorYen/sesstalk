@@ -60,7 +60,7 @@ class McpTests(unittest.TestCase):
         names = [tool["name"] for tool in replies[1]["result"]["tools"]]
         self.assertIn("sesstalk_send", names)
         self.assertIn("sesstalk_nudge", names)
-        self.assertIn("sesstalk_who", names)
+        self.assertIn("sesstalk_peek", names)
 
     def test_send_tool_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,3 +85,31 @@ class McpTests(unittest.TestCase):
             got = payload(run_cli(home, "receive", "--name", "b", "--timeout", "5"))
             self.assertEqual(got["message"]["text"], "via-mcp")
             self.assertTrue(got["message"]["provenance"]["untrusted"])
+
+    def test_send_fanout_via_comma_to(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            replies = mcp_exchange(
+                [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "sesstalk_send",
+                            "arguments": {
+                                "to": "b,c",
+                                "sender": "a",
+                                "text": "fan",
+                                "thread": "t9",
+                            },
+                        },
+                    }
+                ],
+                home=home,
+            )
+            inner = json.loads(replies[0]["result"]["content"][0]["text"])
+            self.assertEqual(len(inner["messages"]), 2)
+            peeked = payload(run_cli(home, "peek", "--name", "c"))
+            self.assertEqual(peeked["next"]["thread"], "t9")
+

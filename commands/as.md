@@ -9,6 +9,8 @@ User arguments: $ARGUMENTS
 
 Run immediately. Do not read SKILL.md.
 
+If MCP tool `sesstalk_as` is available, call it now with `name` = `$ARGUMENTS`. Do not use Shell.
+
 Remember `<this-session-name>` as this chat's mailbox.
 
 ```text

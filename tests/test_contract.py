@@ -29,6 +29,8 @@ REQUIRED = (
     "files",
     "meta",
     "provenance",
+    "thread",
+    "audience",
 )
 
 

@@ -4,6 +4,8 @@
   "from": "cursor-a",
   "to": "cursor-b",
   "reply_to": null,
+  "thread": "auth-review",
+  "audience": ["cursor-b"],
   "text": "please continue",
   "handoff": "checkpoint 4, next is auth",
   "goal": "Ship auth without breaking JWT tenant_id",
