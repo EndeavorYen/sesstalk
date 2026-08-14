@@ -77,3 +77,14 @@ class IdentityTests(unittest.TestCase):
         who = payload(run_cli(self.home, "who", cwd=ws))
         self.assertEqual(who["identities"], ["cursor-a"])
         self.assertNotIn("warning", who)
+
+    def test_who_accepts_from_flag(self) -> None:
+        ws = self.home / "shared"
+        ws.mkdir()
+        run_cli(self.home, "as", "grok-bob", cwd=ws)
+        run_cli(self.home, "as", "hermes", cwd=ws)
+        failed = run_cli(self.home, "who", "--from", "grok-bob", cwd=ws, check=False)
+        self.assertEqual(failed.returncode, 0, failed.stderr)
+        who = payload(failed)
+        self.assertEqual(who["from"], "grok-bob")
+        self.assertNotIn("warning", who)

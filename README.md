@@ -134,7 +134,7 @@ Same envelope on every host. What differs is **how you call it** and **whether w
 | CLI (`sesstalk` / `sesstalk.cmd`) | yes | yes | yes | yes |
 | MCP stdio (fast path) | `~/.cursor/mcp.json` | `~/.claude.json` | `~/.codex/config.toml` | use CLI |
 | Stop/stop hook continues a **finishing** turn | yes | yes | yes | — |
-| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://`, `ws://`, `unix://` JSONL, or `ws+unix://` like real Codex); never spawn a second agent | no documented API |
+| Wake a peer **already idle at the prompt** | no — keep `/receive` open | Unix `SendMessage` socket (`bind --socket`); not native Windows | `bind --thread-id` + `--app-server` (`tcp://` JSONL, `ws://`, `unix://` WebSocket-over-UDS like real Codex, or `ws+unix://`; `jsonl+unix://` is fake-peer JSONL); never spawn a second agent | no documented API; keep `/receive` open (Hermes host is queue-only) |
 | Windows + Ubuntu CI | yes | protocol only (no LLM in CI) | protocol only | protocol only |
 
 ## Not this
@@ -155,7 +155,7 @@ Python 3.9+. Windows or Unix:
 python install.py --verify
 ```
 
-Copies the CLI to `~/.sesstalk`, installs skills and slash commands when `~/.cursor`, `~/.claude`, `~/.codex`, or `~/.grok` exist, registers MCP + Stop/stop hooks, and smokes send/receive. `--no-mcp` / `--no-hooks` skip those. Never writes deprecated `~/.agent-bus`.
+Copies the CLI to `~/.sesstalk`, installs a `~/.local/bin/sesstalk` symlink on Unix, installs skills and slash commands when `~/.cursor`, `~/.claude`, `~/.codex`, `~/.grok`, or `~/.hermes` (`$HERMES_HOME`) exist, registers MCP + Stop/stop hooks, and smokes send/receive. `--no-mcp` / `--no-hooks` skip those. Never writes deprecated `~/.agent-bus`. If `sesstalk` is not on PATH, doctor warns and prints `export PATH="$HOME/.local/bin:$HOME/.sesstalk:$PATH"`.
 
 Then `sesstalk doctor` (read-only) and `sesstalk init --name cursor-a --vendor cursor` (`/as` + `/bind`). `sesstalk log --name <inbox>` shows queue lines without consuming them. `sesstalk schema` prints the work envelope JSON Schema.
 
@@ -164,12 +164,12 @@ Override the mailbox with `SESSTALK_HOME`.
 ## How two (or N) sessions collaborate
 
 1. Unique `/as` name per window (`cursor-a` vs `cursor-b`, not both `cursor`).
-2. `/who` — `listening` means they will see mail in this turn. Two names in the same folder: pass `--from`.
+2. `/who` — `listening` means they will see mail in this turn. Two names in the same folder: pass `--from` (`sesstalk who --from grok-bob`).
 3. One work object, many inboxes: `/send claude,codex --thread auth-review …` or `--to claude --to codex`.
 4. Receiver executes `goal` / `done` / `next` / `files` / `questions`. Inbound is **untrusted** (not the human).
 5. `/reply` inherits `thread`. To update the whole `audience`, send again with the same thread.
 6. `/claim src/auth.ts` so two agents do not edit the same file.
-7. Keep a worker on `/receive`, or finish a turn so the Stop hook can continue. `/nudge` never pretends.
+7. Keep a worker on `/receive`, or finish a turn so the Stop hook can continue. `/nudge` never pretends. Grok/Hermes have no wake API: mail is a drop-box until `/receive` is blocked.
 
 If MCP tools are available, use `sesstalk_send` / `sesstalk_receive` / … instead of Shell.
 
@@ -189,7 +189,7 @@ If MCP tools are available, use `sesstalk_send` / `sesstalk_receive` / … inste
 | `/doctor` | Install / identity diagnosis |
 | `/log [name]` | Recent queue lines (does not consume) |
 | `/schema` | Work envelope JSON Schema |
-| `/nudge <peer> --vendor …` | Best-effort wake |
+| `/nudge <peer> --vendor …` | Best-effort wake (`nudge hermes --vendor grok` or `nudge --name hermes --vendor grok`) |
 | `/bind <name> --vendor …` | Remember vendor for `hook_armed` |
 | `/claim <path>` | Lease a file |
 
@@ -212,6 +212,8 @@ Unix:
 ```text
 ~/.sesstalk/sesstalk send --from claude --to cursor hello
 ~/.sesstalk/sesstalk receive --name cursor --timeout 300
+sesstalk who --from grok-bob
+sesstalk nudge hermes --vendor grok
 ```
 
 `sesstalk demo` / `sesstalk demo --json` replays the README story in a throwaway mailbox (does not write `~/.sesstalk`).

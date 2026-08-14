@@ -18,3 +18,5 @@ If the peer is already `/receive`-ing, you will get `attention: listening`. If n
 ```text
 "%USERPROFILE%\.sesstalk\sesstalk.cmd" nudge --name <peer> --vendor cursor
 ```
+
+Unix also accepts a positional peer: `sesstalk nudge hermes --vendor grok`. Grok/Hermes return `idle_no_adapter`; keep `/receive` open.

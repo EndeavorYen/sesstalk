@@ -27,6 +27,11 @@ def run_demo() -> str:
     return proc.stdout
 
 
+def write_text_lf(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
 def write_cast(text: str, path: Path, width: int = 88, height: int = 32) -> None:
     header = {"version": 2, "width": width, "height": height, "title": "sesstalk demo"}
     lines = [json.dumps(header)]
@@ -80,7 +85,7 @@ def write_svg(text: str, path: Path) -> None:
         f'  {"".join(parts)}\n'
         "</svg>\n"
     )
-    path.write_text(svg, encoding="utf-8", newline="\n")
+    write_text_lf(path, svg)
 
 
 def main() -> None:
@@ -90,7 +95,7 @@ def main() -> None:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     text = run_demo()
-    (out / "demo.txt").write_text(text, encoding="utf-8", newline="\n")
+    write_text_lf(out / "demo.txt", text)
     write_svg(text, out / "demo.svg")
     write_cast(text, out / "demo.cast")
     print(f"wrote {out / 'demo.txt'}", flush=True)
