@@ -33,7 +33,25 @@ def hermes_home() -> Path:
 
 
 def sesstalk_on_path() -> bool:
-    return shutil.which("sesstalk") is not None
+    found = shutil.which("sesstalk")
+    if not found:
+        return False
+    try:
+        proc = subprocess.run(
+            [found, "version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if proc.returncode != 0:
+        return False
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return False
+    return payload.get("ok") is True and payload.get("status") == "version"
 
 
 def install_cli() -> Path:

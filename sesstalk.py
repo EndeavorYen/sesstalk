@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -1836,13 +1837,35 @@ def mailbox_health(home: Path, name: str) -> dict[str, Any]:
     }
 
 
+def sesstalk_on_path() -> bool:
+    found = shutil.which("sesstalk")
+    if not found:
+        return False
+    try:
+        proc = subprocess.run(
+            [found, "version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if proc.returncode != 0:
+        return False
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return False
+    return payload.get("ok") is True and payload.get("status") == "version"
+
+
 def cmd_doctor(_args: argparse.Namespace) -> None:
     home = bus_home()
     ensure_dirs(home)
     user = Path.home()
     names = cwd_identity_names(home)
     peers = collect_names(home)
-    on_path = shutil.which("sesstalk") is not None
+    on_path = sesstalk_on_path()
     hermes = Path(os.environ["HERMES_HOME"]).expanduser() if os.environ.get("HERMES_HOME") else user / ".hermes"
     hosts = {
         "cursor": (user / ".cursor").exists(),

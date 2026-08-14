@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -52,6 +53,23 @@ class OpsTests(unittest.TestCase):
         self.assertEqual(data["mailboxes"]["claude"]["unread"], 1)
         self.assertEqual(data["mailboxes"]["claude"]["last_thread"], "auth-review")
         self.assertEqual(data["mailboxes"]["claude"]["corrupt"], 0)
+
+    @unittest.skipIf(sys.platform == "win32", "Unix PATH stub")
+    def test_doctor_on_path_false_when_path_binary_cannot_run(self) -> None:
+        stub_dir = self.home / "stub-bin"
+        stub_dir.mkdir()
+        stub = stub_dir / "sesstalk"
+        stub.write_text("#!/bin/sh\necho not-json\nexit 2\n", encoding="utf-8")
+        stub.chmod(0o755)
+        data = payload(
+            run_cli(
+                self.home,
+                "doctor",
+                extra_env={"PATH": os.pathsep.join([str(stub_dir), "/usr/bin", "/bin"])},
+            )
+        )
+        self.assertFalse(data["on_path"])
+        self.assertIn("PATH", data["warning"])
 
     def test_schema_lists_contract_keys(self) -> None:
         data = payload(run_cli(self.home, "schema"))

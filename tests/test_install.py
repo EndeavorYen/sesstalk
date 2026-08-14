@@ -162,9 +162,75 @@ class InstallTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             link = home / ".local" / "bin" / "sesstalk"
-            self.assertTrue(link.exists(), result.stdout + result.stderr)
+            self.assertTrue(link.is_symlink(), result.stdout + result.stderr)
+            self.assertEqual(link.resolve(), (home / ".sesstalk" / "sesstalk").resolve())
             payload = _first_json(result.stdout)
             self.assertIn("on_path", payload)
             self.assertFalse(payload["on_path"])
             self.assertIn("PATH", payload["warning"])
             self.assertIn("export PATH=", result.stderr)
+
+            exec_env = env.copy()
+            exec_env["SESSTALK_PYTHON"] = sys.executable
+            elsewhere = home / "elsewhere"
+            elsewhere.mkdir()
+            ran = subprocess.run(
+                [str(link), "version"],
+                cwd=str(elsewhere),
+                env=exec_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            version = json.loads(ran.stdout)
+            self.assertTrue(version["ok"])
+            self.assertEqual(version["status"], "version")
+
+            path_env = exec_env.copy()
+            path_env["PATH"] = os.pathsep.join(
+                [str(home / ".local" / "bin"), str(Path(sys.executable).parent), "/usr/bin", "/bin"]
+            )
+            via_path = subprocess.run(
+                ["sesstalk", "version"],
+                cwd=str(elsewhere),
+                env=path_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(via_path.returncode, 0, via_path.stdout + via_path.stderr)
+            path_version = json.loads(via_path.stdout)
+            self.assertTrue(path_version["ok"])
+            self.assertEqual(path_version["status"], "version")
+
+            verify = subprocess.run(
+                [sys.executable, "-S", str(ROOT / "install.py"), "--verify", "--no-mcp", "--no-hooks"],
+                cwd=str(ROOT),
+                env=path_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            verify_payload = _first_json(verify.stdout)
+            self.assertTrue(verify_payload["on_path"], verify.stdout + verify.stderr)
+
+    @unittest.skipIf(sys.platform == "win32", "Unix PATH stub")
+    def test_on_path_false_when_path_binary_cannot_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _isolated_env(tmp)
+            stub_dir = Path(tmp) / "stub-bin"
+            stub_dir.mkdir()
+            stub = stub_dir / "sesstalk"
+            stub.write_text("#!/bin/sh\necho not-json\nexit 2\n", encoding="utf-8")
+            stub.chmod(0o755)
+            env["PATH"] = os.pathsep.join([str(stub_dir), env["PATH"]])
+            result = subprocess.run(
+                [sys.executable, "-S", str(ROOT / "install.py"), "--no-mcp", "--no-hooks"],
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = _first_json(result.stdout)
+            self.assertFalse(payload["on_path"], result.stdout + result.stderr)
+            self.assertIn("PATH", payload["warning"])
