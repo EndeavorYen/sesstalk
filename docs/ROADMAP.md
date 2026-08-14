@@ -31,7 +31,7 @@ Not Slack. Not a cloud bus. Not 20 MCP chat tools.
 | Identity | `/as` keyed by cwd; two chats in one folder must pass `--from` |
 | Cursor hook | Stop hook maps cwd → unique bind |
 | Claude | Fake AF_UNIX `SendMessage`; native Windows is `idle_no_adapter` |
-| Codex | `bind --thread-id` + `--app-server` `tcp://` / `ws://` / `unix://` (not native Windows); never spawn |
+| Codex | `bind --thread-id` + `--app-server` `tcp://` JSONL / `ws://` / `unix://` WebSocket-over-UDS (not native Windows); `jsonl+unix://` for fake JSONL; never spawn |
 | Ops | `version` `schema` `doctor` `init` `log` |
 | README | Regenerable zinc+lime SVGs; interop table; explicit **Not this** |
 
@@ -44,8 +44,8 @@ Not Slack. Not a cloud bus. Not 20 MCP chat tools.
 
 Follow-ups that stay in scope:
 
-- Real Codex `app-server --listen unix://` is WebSocket-over-UDS; use `ws+unix://PATH`. Layer 1 `unix://` stays newline JSON-RPC for fake peers. Native Windows: `idle_no_adapter`.
-- Grok: keep `/receive`; no fake wake API
+- Real Codex `app-server --listen unix://` is WebSocket-over-UDS; `unix://` now speaks that protocol. Fake-peer newline JSON-RPC uses `jsonl+unix://PATH`. Native Windows: `idle_no_adapter`.
+- Grok/Hermes: keep `/receive`; no fake wake API. Installer detects `~/.hermes`.
 
 ## Anti-goals (reject PRs)
 

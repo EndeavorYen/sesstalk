@@ -35,13 +35,13 @@ sesstalk bind --name codex --vendor codex --thread-id thr_... --app-server tcp:/
 sesstalk nudge --name codex --vendor codex
 ```
 
-No endpoint: `idle_no_adapter` (will not spawn). Connect/RPC fail: `error`. Success: `started_turn` / `adapter: codex_app_server`. Layer 1 talks newline JSON-RPC over `tcp://` and `unix://` (not native Windows), JSON-RPC over `ws://`, **and** the same WebSocket handshake over `ws+unix://PATH` / `unix+ws://PATH` (Codex `--listen unix://`, not native Windows). Failures stay `error` / `idle_no_adapter`. Do not start `codex app-server` from nudge.
+No endpoint: `idle_no_adapter` (will not spawn). Connect/RPC fail: `error`. Success: `started_turn` / `adapter: codex_app_server` after `initialize` + `initialized` + matching `turn/start` response id. Layer 1 talks newline JSON-RPC over `tcp://`, JSON-RPC over WebSocket for `unix://` (real Codex app-server protocol, not native Windows), JSON-RPC over `ws://`, **and** the same WebSocket handshake over `ws+unix://PATH` / `unix+ws://PATH`. Fake-peer newline JSON-RPC over UDS uses `jsonl+unix://PATH`. Failures stay `error` / `idle_no_adapter`. Do not start `codex app-server` from nudge. `started_turn` means the app-server accepted `turn/start` after initialize — not a later `turn/started` event.
 
 Portable adapter: `~/.codex/hooks.json` Stop hook → `sesstalk hook --vendor codex` (same JSON as Claude).
 
-### Grok
+### Grok / Hermes
 
-No documented wake API. Keep `/receive` open. `blocker` says so.
+No documented wake API (no Stop hook, no inbox socket, no gateway). Hermes (`~/.hermes` or `$HERMES_HOME`) is a grok-side **host**: the installer copies the skill there, but `nudge --vendor grok` / `hermes` is always `idle_no_adapter`. `bind` / `init` do **not** set `hook: true` for these vendors. Keep `/receive` open. Mail is a drop-box until the peer is blocked on receive.
 
 ## Depth
 

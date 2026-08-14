@@ -65,7 +65,7 @@ class McpTests(unittest.TestCase):
         self.assertIn("sesstalk_log", names)
         self.assertIn("sesstalk_init", names)
         self.assertIn("sesstalk_schema", names)
-        self.assertEqual(replies[0]["result"]["serverInfo"]["version"], "0.5.1")
+        self.assertEqual(replies[0]["result"]["serverInfo"]["version"], "0.5.2")
 
     def test_send_tool_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

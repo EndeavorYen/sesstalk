@@ -13,6 +13,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import payload, run_cli
 
 
+def _jsonl_read_obj(conn: socket.socket, buf: bytearray) -> dict:
+    while b"\n" not in buf:
+        chunk = conn.recv(4096)
+        if not chunk:
+            raise OSError("closed")
+        buf.extend(chunk)
+    line, rest = bytes(buf).split(b"\n", 1)
+    buf.clear()
+    buf.extend(rest)
+    return json.loads(line.decode("utf-8") or "{}")
+
+
+def _serve_codex_jsonl(conn: socket.socket, got: list[dict]) -> None:
+    conn.settimeout(2)
+    buf = bytearray()
+    first = _jsonl_read_obj(conn, buf)
+    got.append(first)
+    conn.sendall((json.dumps({"id": first.get("id"), "result": {}}) + "\n").encode("utf-8"))
+    if first.get("method") != "initialize":
+        return
+    second = _jsonl_read_obj(conn, buf)
+    got.append(second)
+    third = _jsonl_read_obj(conn, buf)
+    got.append(third)
+    conn.sendall(
+        (json.dumps({"id": third.get("id"), "result": {"turn": {"id": "turn_fake"}}}) + "\n").encode(
+            "utf-8"
+        )
+    )
+
+
 def _jsonl_server(got: list[dict]) -> tuple[str, threading.Thread, callable]:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -24,17 +55,7 @@ def _jsonl_server(got: list[dict]) -> tuple[str, threading.Thread, callable]:
         try:
             conn, _addr = server.accept()
             with conn:
-                conn.settimeout(2)
-                buf = b""
-                while b"\n" not in buf:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    buf += chunk
-                if buf.strip():
-                    got.append(json.loads(buf.split(b"\n", 1)[0].decode("utf-8")))
-                reply = json.dumps({"id": 1, "result": {"turn": {"id": "turn_fake"}}}) + "\n"
-                conn.sendall(reply.encode("utf-8"))
+                _serve_codex_jsonl(conn, got)
         finally:
             server.close()
 
@@ -100,6 +121,34 @@ def _ws_encode_server_text(text: str) -> bytes:
     return bytes(header) + payload
 
 
+def _serve_codex_ws_rpc(conn: socket.socket, rest: bytes, got: list[dict]) -> None:
+    buf = rest
+    for _ in range(3):
+        payload = None
+        while payload is None:
+            payload, buf = _ws_decode_client_frame(buf)
+            if payload is not None:
+                break
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            buf += chunk
+        got.append(json.loads(payload))
+        method = got[-1].get("method")
+        req_id = got[-1].get("id")
+        if method == "initialize":
+            conn.sendall(_ws_encode_server_text(json.dumps({"id": req_id, "result": {}})))
+        elif method == "initialized":
+            continue
+        elif method == "turn/start":
+            conn.sendall(
+                _ws_encode_server_text(
+                    json.dumps({"id": req_id, "result": {"turn": {"id": "turn_ws"}}})
+                )
+            )
+            return
+
+
 def _ws_server(got: list[dict]) -> tuple[str, threading.Thread]:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -133,19 +182,7 @@ def _ws_server(got: list[dict]) -> tuple[str, threading.Thread]:
                         "\r\n"
                     ).encode("ascii")
                 )
-                buf = rest
-                payload = None
-                while payload is None:
-                    payload, buf = _ws_decode_client_frame(buf)
-                    if payload is not None:
-                        break
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        return
-                    buf += chunk
-                got.append(json.loads(payload))
-                reply = json.dumps({"id": 1, "result": {"turn": {"id": "turn_ws"}}})
-                conn.sendall(_ws_encode_server_text(reply))
+                _serve_codex_ws_rpc(conn, rest, got)
         finally:
             server.close()
 
@@ -197,8 +234,9 @@ class CodexAdapterTests(unittest.TestCase):
         thread.join(timeout=3)
         self.assertEqual(result["attention"], "started_turn")
         self.assertEqual(result["adapter"], "codex_app_server")
-        self.assertEqual(got[0]["method"], "turn/start")
-        self.assertEqual(got[0]["params"]["threadId"], "thr_live")
+        self.assertEqual(got[0]["method"], "initialize")
+        turn = next(item for item in got if item.get("method") == "turn/start")
+        self.assertEqual(turn["params"]["threadId"], "thr_live")
 
     def test_fake_websocket_app_server_turn_start(self) -> None:
         got: list[dict] = []
@@ -219,8 +257,9 @@ class CodexAdapterTests(unittest.TestCase):
         thread.join(timeout=3)
         self.assertEqual(result.get("attention"), "started_turn", result)
         self.assertEqual(result["adapter"], "codex_app_server")
-        self.assertEqual(got[0]["method"], "turn/start")
-        self.assertEqual(got[0]["params"]["threadId"], "thr_ws")
+        self.assertEqual(got[0]["method"], "initialize")
+        turn = next(item for item in got if item.get("method") == "turn/start")
+        self.assertEqual(turn["params"]["threadId"], "thr_ws")
 
     def test_nudge_does_not_spawn_codex_process(self) -> None:
         run_cli(
@@ -255,20 +294,28 @@ class CodexAdapterTests(unittest.TestCase):
                 ready.set()
                 conn, _addr = server.accept()
                 with conn:
-                    conn.settimeout(2)
+                    conn.settimeout(3)
                     buf = b""
-                    while b"\n" not in buf:
+                    while b"\r\n\r\n" not in buf:
                         chunk = conn.recv(4096)
                         if not chunk:
-                            break
+                            return
                         buf += chunk
-                    if buf.strip():
-                        got.append(json.loads(buf.split(b"\n", 1)[0].decode("utf-8")))
+                    headers, rest = buf.split(b"\r\n\r\n", 1)
+                    key = ""
+                    for line in headers.decode("iso-8859-1").split("\r\n"):
+                        if line.lower().startswith("sec-websocket-key:"):
+                            key = line.split(":", 1)[1].strip()
                     conn.sendall(
-                        (json.dumps({"id": 1, "result": {"turn": {"id": "turn_unix"}}}) + "\n").encode(
-                            "utf-8"
-                        )
+                        (
+                            "HTTP/1.1 101 Switching Protocols\r\n"
+                            "Upgrade: websocket\r\n"
+                            "Connection: Upgrade\r\n"
+                            f"Sec-WebSocket-Accept: {_ws_accept_key(key)}\r\n"
+                            "\r\n"
+                        ).encode("ascii")
                     )
+                    _serve_codex_ws_rpc(conn, rest, got)
             finally:
                 server.close()
 
@@ -289,8 +336,49 @@ class CodexAdapterTests(unittest.TestCase):
         )
         result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
         thread.join(timeout=3)
-        self.assertEqual(result["attention"], "started_turn")
-        self.assertEqual(got[0]["params"]["threadId"], "thr_unix")
+        self.assertEqual(result["attention"], "started_turn", result)
+        turn = next(item for item in got if item.get("method") == "turn/start")
+        self.assertEqual(turn["params"]["threadId"], "thr_unix")
+
+    @unittest.skipIf(sys.platform == "win32", "jsonl+unix:// is not native Windows")
+    def test_fake_jsonl_unix_app_server_turn_start(self) -> None:
+        sock_path = str(Path(self.temp.name) / "codex-jsonl.sock")
+        got: list[dict] = []
+        ready = threading.Event()
+
+        def serve() -> None:
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                server.bind(sock_path)
+                server.listen(1)
+                ready.set()
+                conn, _addr = server.accept()
+                with conn:
+                    _serve_codex_jsonl(conn, got)
+            finally:
+                server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.assertTrue(ready.wait(2))
+        run_cli(
+            self.home,
+            "bind",
+            "--name",
+            "codex",
+            "--vendor",
+            "codex",
+            "--thread-id",
+            "thr_jsonl",
+            "--app-server",
+            f"jsonl+unix://{sock_path}",
+        )
+        result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
+        thread.join(timeout=3)
+        self.assertEqual(result["attention"], "started_turn", result)
+        self.assertEqual(got[0]["method"], "initialize")
+        turn = next(item for item in got if item.get("method") == "turn/start")
+        self.assertEqual(turn["params"]["threadId"], "thr_jsonl")
 
     @unittest.skipUnless(sys.platform == "win32", "native Windows unix:// blocker")
     def test_windows_unix_app_server_is_honest_blocker(self) -> None:
@@ -345,20 +433,7 @@ class CodexAdapterTests(unittest.TestCase):
                             "\r\n"
                         ).encode("ascii")
                     )
-                    buf = rest
-                    payload = None
-                    while payload is None:
-                        payload, buf = _ws_decode_client_frame(buf)
-                        if payload is not None:
-                            break
-                        chunk = conn.recv(4096)
-                        if not chunk:
-                            return
-                        buf += chunk
-                    got.append(json.loads(payload))
-                    conn.sendall(
-                        _ws_encode_server_text(json.dumps({"id": 1, "result": {"turn": {"id": "turn_uds_ws"}}}))
-                    )
+                    _serve_codex_ws_rpc(conn, rest, got)
             finally:
                 server.close()
 
@@ -380,7 +455,8 @@ class CodexAdapterTests(unittest.TestCase):
         result = payload(run_cli(self.home, "nudge", "--name", "codex", "--vendor", "codex"))
         thread.join(timeout=3)
         self.assertEqual(result["attention"], "started_turn")
-        self.assertEqual(got[0]["params"]["threadId"], "thr_uds_ws")
+        turn = next(item for item in got if item.get("method") == "turn/start")
+        self.assertEqual(turn["params"]["threadId"], "thr_uds_ws")
 
     @unittest.skipUnless(sys.platform == "win32", "native Windows ws+unix:// blocker")
     def test_windows_unix_ws_app_server_is_honest_blocker(self) -> None:

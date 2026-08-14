@@ -11,6 +11,8 @@ Same machine, two named sessions. Record pass/fail and a corpus fixture under `t
 | Codex | | | | |
 | Grok | | | | |
 
+Grok/Hermes cells stay queue-only: keep `/receive` open. `nudge --vendor grok` is `idle_no_adapter`. Do not record a fake wake.
+
 Checks per cell:
 
 1. `/as` unique names

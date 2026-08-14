@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import uuid
@@ -17,8 +18,10 @@ from typing import Any
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 MAX_RELAY_DEPTH = 2
 LISTENER_TTL_S = 3.0
-VENDORS = ("cursor", "claude", "codex", "grok")
-VERSION = "0.5.1"
+VENDORS = ("cursor", "claude", "codex", "grok", "hermes")
+HOOK_VENDORS = frozenset({"cursor", "claude", "codex"})
+QUEUE_ONLY_VENDORS = frozenset({"grok", "hermes"})
+VERSION = "0.5.2"
 ENVELOPE_KEYS = (
     "id",
     "ts",
@@ -350,8 +353,29 @@ def load_last_inbound(home: Path, inbox: str) -> dict[str, Any] | None:
 
 
 def pid_alive(pid: int) -> bool:
+    """Return True if pid looks live. Never terminate the target process."""
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        import ctypes
+
+        # os.kill(pid, 0) on Windows is TerminateProcess, not a POSIX probe.
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        PROCESS_QUERY_INFORMATION = 0x0400
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return int(code.value) == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except OSError:
@@ -906,8 +930,14 @@ def who_payload(home: Path) -> dict[str, Any]:
     return payload
 
 
-def cmd_who(_args: argparse.Namespace) -> None:
-    print(json.dumps(who_payload(bus_home()), indent=2), flush=True)
+def cmd_who(args: argparse.Namespace) -> None:
+    home = bus_home()
+    payload = who_payload(home)
+    sender = (getattr(args, "sender", None) or "").strip()
+    if sender:
+        payload["from"] = normalize_name(sender)
+        payload.pop("warning", None)
+    print(json.dumps(payload, indent=2), flush=True)
 
 
 def cmd_peek(args: argparse.Namespace) -> None:
@@ -1079,7 +1109,7 @@ def cmd_bind(args: argparse.Namespace) -> None:
     binds[name] = {
         "name": name,
         "vendor": vendor,
-        "hook": True,
+        "hook": vendor in HOOK_VENDORS,
         "socket": args.socket if args.socket is not None else prev.get("socket"),
         "thread_id": getattr(args, "thread_id", None) or prev.get("thread_id"),
         "app_server": getattr(args, "app_server", None) or prev.get("app_server"),
@@ -1214,6 +1244,55 @@ def _codex_endpoint_host_port(endpoint: str) -> tuple[str, int]:
     return host or "127.0.0.1", int(port_s)
 
 
+def _recv_rpc_id(recv: Any, req_id: int) -> dict[str, Any]:
+    for _ in range(32):
+        data = recv()
+        if not isinstance(data, dict):
+            raise OSError("app-server reply was not an object")
+        if data.get("id") == req_id:
+            return data
+    raise OSError(f"no app-server reply for id {req_id}")
+
+
+def _codex_initialize_and_turn_start(send: Any, recv: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Official app-server lifecycle: initialize, initialized, then turn/start."""
+    send({"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}})
+    init_reply = _recv_rpc_id(recv, 1)
+    if init_reply.get("error"):
+        raise OSError(f"initialize: {init_reply.get('error')}")
+    send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+    turn = dict(payload)
+    turn["jsonrpc"] = "2.0"
+    turn["id"] = 2
+    send(turn)
+    return _recv_rpc_id(recv, 2)
+
+
+class _JsonlReader:
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.buf = b""
+
+    def read(self) -> dict[str, Any]:
+        while True:
+            while b"\n" not in self.buf:
+                chunk = self.client.recv(4096)
+                if not chunk:
+                    raise OSError("empty app-server reply")
+                self.buf += chunk
+            line, self.buf = self.buf.split(b"\n", 1)
+            if not line.strip():
+                continue
+            data = json.loads(line.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise OSError("app-server reply was not an object")
+            return data
+
+
+def _jsonl_send(client: Any, payload: dict[str, Any]) -> None:
+    client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+
+
 def jsonrpc_over_tcp(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     import socket as sockmod
 
@@ -1222,50 +1301,39 @@ def jsonrpc_over_tcp(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         client.settimeout(2)
         client.connect((host, port))
-        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-        buf = b""
-        while b"\n" not in buf:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
+        reader = _JsonlReader(client)
+        return _codex_initialize_and_turn_start(
+            lambda obj: _jsonl_send(client, obj), reader.read, payload
+        )
     finally:
         client.close()
-    if not buf.strip():
-        raise OSError("empty app-server reply")
-    data = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
-    if not isinstance(data, dict):
-        raise OSError("app-server reply was not an object")
-    return data
+
+
+def _unix_jsonl_path(endpoint: str) -> str:
+    raw = endpoint.strip()
+    for prefix in ("jsonl+unix://", "unix+jsonl://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    return raw
 
 
 def jsonrpc_over_unix(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     import socket as sockmod
 
-    raw = endpoint.strip()
-    if raw.lower().startswith("unix://"):
-        raw = raw[7:]
+    raw = _unix_jsonl_path(endpoint)
     if sys.platform == "win32":
-        raise OSError("unix:// app-server is not native Windows")
+        raise OSError("jsonl+unix:// app-server is not native Windows")
     client = sockmod.socket(sockmod.AF_UNIX, sockmod.SOCK_STREAM)
     try:
         client.settimeout(2)
         client.connect(raw)
-        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-        buf = b""
-        while b"\n" not in buf:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
+        reader = _JsonlReader(client)
+        return _codex_initialize_and_turn_start(
+            lambda obj: _jsonl_send(client, obj), reader.read, payload
+        )
     finally:
         client.close()
-    if not buf.strip():
-        raise OSError("empty app-server reply")
-    data = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
-    if not isinstance(data, dict):
-        raise OSError("app-server reply was not an object")
-    return data
 
 
 def _ws_client_frame(text: str) -> bytes:
@@ -1319,7 +1387,7 @@ def _ws_decode_unmasked(buf: bytes) -> tuple[str | None, bytes]:
     return None, buf[idx:]
 
 
-def _jsonrpc_over_ws_socket(client: Any, payload: dict[str, Any], *, host: str, path: str) -> dict[str, Any]:
+def _ws_handshake(client: Any, *, host: str, path: str) -> bytes:
     import base64
     import hashlib
 
@@ -1352,21 +1420,38 @@ def _jsonrpc_over_ws_socket(client: Any, payload: dict[str, Any], *, host: str, 
             accept = line.split(":", 1)[1].strip()
     if accept and accept != expected:
         raise OSError("websocket accept mismatch")
-    client.sendall(_ws_client_frame(json.dumps(payload)))
-    buf = rest_buf
-    text = None
-    while text is None:
-        text, buf = _ws_decode_unmasked(buf)
-        if text is not None:
-            break
-        chunk = client.recv(4096)
-        if not chunk:
-            raise OSError("empty websocket reply")
-        buf += chunk
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise OSError("app-server websocket reply was not an object")
-    return data
+    return rest_buf
+
+
+class _WsReader:
+    def __init__(self, client: Any, rest: bytes = b"") -> None:
+        self.client = client
+        self.buf = rest
+
+    def read(self) -> dict[str, Any]:
+        while True:
+            text, self.buf = _ws_decode_unmasked(self.buf)
+            if text is not None:
+                if not text.strip():
+                    continue
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise OSError("app-server websocket reply was not an object")
+                return data
+            chunk = self.client.recv(4096)
+            if not chunk:
+                raise OSError("empty websocket reply")
+            self.buf += chunk
+
+
+def _jsonrpc_over_ws_socket(client: Any, payload: dict[str, Any], *, host: str, path: str) -> dict[str, Any]:
+    rest = _ws_handshake(client, host=host, path=path)
+    reader = _WsReader(client, rest)
+    return _codex_initialize_and_turn_start(
+        lambda obj: client.sendall(_ws_client_frame(json.dumps(obj))),
+        reader.read,
+        payload,
+    )
 
 
 def jsonrpc_over_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1392,7 +1477,7 @@ def jsonrpc_over_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _unix_ws_path(endpoint: str) -> str:
     raw = endpoint.strip()
-    for prefix in ("ws+unix://", "unix+ws://"):
+    for prefix in ("ws+unix://", "unix+ws://", "unix://"):
         if raw.lower().startswith(prefix):
             raw = raw[len(prefix) :]
             break
@@ -1407,7 +1492,7 @@ def jsonrpc_over_unix_ws(endpoint: str, payload: dict[str, Any]) -> dict[str, An
     import socket as sockmod
 
     if sys.platform == "win32":
-        raise OSError("ws+unix:// app-server is not native Windows")
+        raise OSError("unix:// app-server is not native Windows")
     sock_path = _unix_ws_path(endpoint)
     client = sockmod.socket(sockmod.AF_UNIX, sockmod.SOCK_STREAM)
     try:
@@ -1437,7 +1522,7 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
         }
     request = {
         "method": "turn/start",
-        "id": 1,
+        "id": 2,
         "params": {
             "threadId": thread_id,
             "input": [{"type": "text", "text": text[:2000]}],
@@ -1445,17 +1530,17 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
     }
     try:
         low = endpoint.lower()
-        if low.startswith("ws+unix://") or low.startswith("unix+ws://"):
+        if low.startswith("jsonl+unix://") or low.startswith("unix+jsonl://"):
             if sys.platform == "win32":
                 return {
                     "ok": True,
                     "status": "queued",
                     "attention": "idle_no_adapter",
-                    "blocker": "ws+unix:// Codex app-server is not native Windows; use ws:// or tcp://, or WSL",
+                    "blocker": "jsonl+unix:// Codex app-server is not native Windows; use ws:// or tcp://, or WSL",
                     "adapter": "codex_app_server",
                 }
-            reply = jsonrpc_over_unix_ws(endpoint, request)
-        elif low.startswith("unix://"):
+            reply = jsonrpc_over_unix(endpoint, request)
+        elif low.startswith("ws+unix://") or low.startswith("unix+ws://") or low.startswith("unix://"):
             if sys.platform == "win32":
                 return {
                     "ok": True,
@@ -1464,7 +1549,7 @@ def try_codex_turn_start(bind: dict[str, Any], text: str) -> dict[str, Any] | No
                     "blocker": "unix:// Codex app-server is not native Windows; use ws:// or tcp://, or WSL",
                     "adapter": "codex_app_server",
                 }
-            reply = jsonrpc_over_unix(endpoint, request)
+            reply = jsonrpc_over_unix_ws(endpoint, request)
         elif low.startswith("ws://"):
             reply = jsonrpc_over_ws(endpoint, request)
         else:
@@ -1532,6 +1617,19 @@ def run_nudge(home: Path, name: str, vendor: str) -> dict[str, Any]:
             "vendor": vendor,
             "unread": info["unread"],
         }
+    if vendor in QUEUE_ONLY_VENDORS:
+        return {
+            "ok": True,
+            "status": "queued",
+            "attention": "idle_no_adapter",
+            "name": name,
+            "vendor": vendor,
+            "unread": info["unread"],
+            "blocker": (
+                "Grok/Hermes have no documented wake API; keep /receive open. "
+                "Mail sits until the peer is blocked on receive. nudge will not start a turn."
+            ),
+        }
     bind = load_binds(home).get(name) or {}
     socket_path = str(bind.get("socket") or os.environ.get("SESSTALK_CLAUDE_SOCKET") or "")
     if vendor == "claude" and socket_path:
@@ -1562,7 +1660,8 @@ def run_nudge(home: Path, name: str, vendor: str) -> dict[str, Any]:
         "claude": "Claude SendMessage inbox sockets are macOS/Linux; native Windows uses the Stop hook instead",
         "codex": "Codex turn/start needs an app-server thread id; Stop hook is the portable adapter",
         "cursor": "Cursor has no peer SendMessage; stop hook followup_message continues a finishing turn",
-        "grok": "Grok has no documented wake API; keep /receive open or install a host hook when one exists",
+        "grok": "Grok/Hermes have no documented wake API; keep /receive open. Mail sits until the peer is blocked on receive.",
+        "hermes": "Grok/Hermes have no documented wake API; keep /receive open. Mail sits until the peer is blocked on receive.",
         "unknown": "no adapter",
     }
     return {
@@ -1579,9 +1678,10 @@ def run_nudge(home: Path, name: str, vendor: str) -> dict[str, Any]:
 def cmd_nudge(args: argparse.Namespace) -> None:
     home = bus_home()
     ensure_dirs(home)
-    name = identity_name(home, args.name)
-    if not name:
-        die("pass --name")
+    peer = args.peer or args.name
+    if not peer:
+        die("pass --name or nudge <peer>")
+    name = normalize_name(peer)
     vendor = (args.vendor or "unknown").strip().lower()
     if vendor != "unknown" and vendor not in VENDORS:
         die(f"vendor must be one of {', '.join(VENDORS)}")
@@ -1742,6 +1842,15 @@ def cmd_doctor(_args: argparse.Namespace) -> None:
     user = Path.home()
     names = cwd_identity_names(home)
     peers = collect_names(home)
+    on_path = shutil.which("sesstalk") is not None
+    hermes = Path(os.environ["HERMES_HOME"]).expanduser() if os.environ.get("HERMES_HOME") else user / ".hermes"
+    hosts = {
+        "cursor": (user / ".cursor").exists(),
+        "claude": (user / ".claude").exists() or (user / ".claude.json").exists(),
+        "codex": (user / ".codex").exists(),
+        "grok": (user / ".grok").exists(),
+        "hermes": hermes.exists(),
+    }
     payload: dict[str, Any] = {
         "ok": True,
         "status": "doctor",
@@ -1753,6 +1862,8 @@ def cmd_doctor(_args: argparse.Namespace) -> None:
         "binds": sorted(load_binds(home).keys()),
         "peers": peers,
         "mailboxes": {name: mailbox_health(home, name) for name in peers},
+        "on_path": on_path,
+        "hosts": hosts,
         "mcp": {
             "cursor": _config_mentions_sesstalk(user / ".cursor" / "mcp.json"),
             "claude": _config_mentions_sesstalk(user / ".claude.json"),
@@ -1764,8 +1875,19 @@ def cmd_doctor(_args: argparse.Namespace) -> None:
             "codex": _config_mentions_sesstalk(user / ".codex" / "hooks.json"),
         },
     }
+    warnings: list[str] = []
     if len(names) > 1:
-        payload["warning"] = "this directory has multiple /as names; pass --from"
+        warnings.append("this directory has multiple /as names; pass --from")
+    if not on_path:
+        warnings.append(
+            'sesstalk not on PATH; add ~/.local/bin or export PATH="$HOME/.sesstalk:$PATH"'
+        )
+    if hosts["hermes"] and not hosts["grok"]:
+        payload["hermes_note"] = (
+            "Hermes host present. Grok/Hermes cannot wake an idle peer; keep /receive open."
+        )
+    if warnings:
+        payload["warning"] = "; ".join(warnings)
     print(json.dumps(payload), flush=True)
 
 
@@ -1782,7 +1904,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     bind = {
         "name": name,
         "vendor": vendor,
-        "hook": True,
+        "hook": vendor in HOOK_VENDORS,
         "socket": args.socket if args.socket is not None else prev.get("socket"),
         "thread_id": getattr(args, "thread_id", None) or prev.get("thread_id"),
         "app_server": getattr(args, "app_server", None) or prev.get("app_server"),
@@ -1912,11 +2034,14 @@ def build_parser() -> argparse.ArgumentParser:
     peek.set_defaults(func=cmd_peek)
 
     who = sub.add_parser("who", help="Show listening vs idle vs unknown")
+    who.add_argument("--from", dest="sender", default="")
     who.set_defaults(func=cmd_who)
     listing = sub.add_parser("list", help="Alias for who")
+    listing.add_argument("--from", dest="sender", default="")
     listing.set_defaults(func=cmd_list)
 
     nudge = sub.add_parser("nudge", help="Best-effort wake; never pretend a turn started")
+    nudge.add_argument("peer", nargs="?", default="")
     nudge.add_argument("--name", default="")
     nudge.add_argument("--vendor", default="unknown")
     nudge.set_defaults(func=cmd_nudge)
@@ -2067,7 +2192,7 @@ def _mcp_tools() -> list[dict[str, Any]]:
                 },
                 ["to", "goal"],
             ),
-            ("sesstalk_who", "listening vs idle vs unknown", {}, []),
+            ("sesstalk_who", "listening vs idle vs unknown", {"sender": string}, []),
             (
                 "sesstalk_nudge",
                 "Best-effort attention. Distinct from send. May return hook_armed.",
@@ -2199,6 +2324,8 @@ def _mcp_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             extra += ["--question", str(arguments["question"])]
         if arguments.get("thread"):
             extra += ["--thread", str(arguments["thread"])]
+    elif name == "sesstalk_who" and arguments.get("sender"):
+        extra += ["--from", str(arguments["sender"])]
     elif name == "sesstalk_nudge" and arguments.get("vendor"):
         extra += ["--vendor", str(arguments["vendor"])]
     elif name == "sesstalk_claim":

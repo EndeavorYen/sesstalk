@@ -25,6 +25,17 @@ def python_path() -> str:
     return sys.executable
 
 
+def hermes_home() -> Path:
+    raw = os.environ.get("HERMES_HOME", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return HOME / ".hermes"
+
+
+def sesstalk_on_path() -> bool:
+    return shutil.which("sesstalk") is not None
+
+
 def install_cli() -> Path:
     dest_dir = HOME / ".sesstalk"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -36,6 +47,30 @@ def install_cli() -> Path:
         unix.chmod(unix.stat().st_mode | 0o111)
     except OSError:
         pass
+
+    if sys.platform != "win32":
+        local_bin = HOME / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        symlink = local_bin / "sesstalk"
+        try:
+            if symlink.exists() or symlink.is_symlink():
+                symlink.unlink()
+            symlink.symlink_to(unix)
+            print(f"symlinked {symlink} -> {unix}")
+        except OSError as exc:
+            print(f"could not symlink to {local_bin}: {exc}", file=sys.stderr)
+
+    if not sesstalk_on_path():
+        if sys.platform == "win32":
+            print(
+                'sesstalk not on PATH; add %USERPROFILE%\\.sesstalk to PATH or call "%USERPROFILE%\\.sesstalk\\sesstalk.cmd"',
+                file=sys.stderr,
+            )
+        else:
+            print(
+                'sesstalk not on PATH; export PATH="$HOME/.local/bin:$HOME/.sesstalk:$PATH"',
+                file=sys.stderr,
+            )
     return dest_dir
 
 
@@ -236,25 +271,53 @@ def doctor(
     hooks_registered: dict[str, bool],
     configured: list[str],
     skipped: list[str],
+    skip_reasons: list[str],
 ) -> None:
+    on_path = sesstalk_on_path()
     payload = {
         "python": python_path(),
         "home": str(HOME / ".sesstalk"),
         "cli": str(cli_dir / "sesstalk.py"),
+        "on_path": on_path,
         "mcp_registered": any(mcp_registered.values()),
         "mcp": mcp_registered,
         "hooks": hooks_registered,
         "configured": configured,
         "skipped": skipped,
+        "skip_reasons": skip_reasons,
+        "hosts": {
+            "cursor": (HOME / ".cursor").exists(),
+            "claude": (HOME / ".claude").exists() or (HOME / ".claude.json").exists(),
+            "codex": (HOME / ".codex").exists(),
+            "grok": (HOME / ".grok").exists(),
+            "hermes": hermes_home().exists(),
+        },
         "deprecated_agent_bus": str(HOME / ".agent-bus"),
         "writes_agent_bus": False,
         "note": "~/.agent-bus is deprecated; sesstalk never writes there",
     }
+    warnings: list[str] = []
+    if not on_path:
+        if sys.platform == "win32":
+            warnings.append(
+                r'sesstalk not on PATH; add %USERPROFILE%\.sesstalk to PATH or call "%USERPROFILE%\.sesstalk\sesstalk.cmd"'
+            )
+        else:
+            warnings.append(
+                'sesstalk not on PATH; export PATH="$HOME/.local/bin:$HOME/.sesstalk:$PATH"'
+            )
+    if "hermes" in configured and "grok" in skipped:
+        warnings.append(
+            "Hermes host configured; Grok/Hermes cannot wake an idle peer — keep /receive open"
+        )
+    if warnings:
+        payload["warning"] = "; ".join(warnings)
     print(json.dumps(payload, indent=2))
     print(
-        "doctor: python={python} home={home} mcp={mcp}".format(
+        "doctor: python={python} home={home} on_path={on_path} mcp={mcp}".format(
             python=payload["python"],
             home=payload["home"],
+            on_path=on_path,
             mcp=payload["mcp_registered"],
         )
     )
@@ -275,11 +338,13 @@ def main() -> None:
     cli_dir = install_cli()
     configured = []
     skipped = []
+    skip_reasons: list[str] = []
     for agent_home, label in (
         (HOME / ".cursor", "cursor"),
         (HOME / ".claude", "claude"),
         (HOME / ".codex", "codex"),
         (HOME / ".grok", "grok"),
+        (hermes_home(), "hermes"),
     ):
         if agent_home.exists():
             dest = agent_home / "skills" / "sesstalk" / "SKILL.md"
@@ -288,6 +353,15 @@ def main() -> None:
             configured.append(label)
         else:
             skipped.append(label)
+            if label == "hermes":
+                skip_reasons.append(f"hermes skipped ({agent_home} missing)")
+            elif label == "grok":
+                skip_reasons.append("grok skipped (~/.grok missing)")
+
+    if "grok" in skipped and "hermes" in configured:
+        skip_reasons.append("Hermes is the grok-side host; keep /receive open (no wake API)")
+    elif "grok" in skipped and "hermes" in skipped:
+        skip_reasons.append("no grok/hermes host (~/.grok and ~/.hermes missing)")
 
     if (HOME / ".cursor").exists():
         install_commands(HOME / ".cursor" / "commands")
@@ -308,10 +382,23 @@ def main() -> None:
 
     print("configured:", ", ".join(configured) or "(none)")
     print("skipped:", ", ".join(skipped) or "(none)")
+    if skip_reasons:
+        print("skip_reasons:", "; ".join(skip_reasons))
     print("deprecated ~/.agent-bus is unused; installer does not write there")
-    doctor(cli_dir, mcp_registered, hooks_registered, configured, skipped)
+    doctor(cli_dir, mcp_registered, hooks_registered, configured, skipped, skip_reasons)
     if args.verify:
         verify_mailbox(cli_dir / "sesstalk.py")
+        if not sesstalk_on_path():
+            if sys.platform == "win32":
+                print(
+                    'verify PATH: sesstalk not resolvable; add %USERPROFILE%\\.sesstalk to PATH',
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    'verify PATH: sesstalk not resolvable; export PATH="$HOME/.local/bin:$HOME/.sesstalk:$PATH"',
+                    file=sys.stderr,
+                )
     print("ok")
 
 

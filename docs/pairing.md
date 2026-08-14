@@ -20,7 +20,7 @@ Open three chats (mix vendors if you can). Unique names:
 
 (/init is /as + /bind. Unique names still required.)
 
-Keep at least one worker on `/receive` **or** finish a turn so the Stop/stop hook can continue.
+Keep at least one worker on `/receive` **or** finish a turn so the Stop/stop hook can continue. Grok/Hermes pairs have no wake: keep `/receive` blocked or mail sits unread.
 
 ## Script
 

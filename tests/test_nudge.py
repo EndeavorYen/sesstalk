@@ -21,12 +21,25 @@ class NudgeTests(unittest.TestCase):
 
     def test_idle_no_adapter_for_each_vendor(self) -> None:
         run_cli(self.home, "send", "--from", "a", "--to", "peer", "queued")
-        for vendor in ("cursor", "claude", "codex", "grok"):
+        for vendor in ("cursor", "claude", "codex", "grok", "hermes"):
             result = payload(
                 run_cli(self.home, "nudge", "--name", "peer", "--vendor", vendor)
             )
             self.assertEqual(result["attention"], "idle_no_adapter", vendor)
             self.assertEqual(result["status"], "queued")
+
+    def test_nudge_accepts_positional_peer(self) -> None:
+        result = payload(run_cli(self.home, "nudge", "hermes", "--vendor", "grok"))
+        self.assertEqual(result["name"], "hermes")
+        self.assertEqual(result["attention"], "idle_no_adapter")
+        self.assertIn("receive", result["blocker"])
+
+    def test_grok_bind_does_not_claim_hook_armed(self) -> None:
+        run_cli(self.home, "init", "--name", "hermes", "--vendor", "grok")
+        result = payload(run_cli(self.home, "nudge", "--name", "hermes", "--vendor", "grok"))
+        self.assertEqual(result["attention"], "idle_no_adapter")
+        self.assertNotEqual(result["attention"], "hook_armed")
+        self.assertIn("receive", result["blocker"])
 
     def test_fake_adapter_started_turn(self) -> None:
         result = payload(

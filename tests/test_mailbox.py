@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -99,6 +100,27 @@ class MailboxTests(unittest.TestCase):
         second = payload(run_cli(self.home, "receive", "--name", "inbox", "--timeout", "5"))
         texts = {first["message"]["text"], second["message"]["text"]}
         self.assertEqual(texts, {"m0", "m1"})
+
+    def test_many_concurrent_sends_keep_unique_ids(self) -> None:
+        def send(text: str) -> str:
+            return payload(run_cli(self.home, "send", "--from", "a", "--to", "inbox", text))["message"]["id"]
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futs = [pool.submit(send, f"m{i}") for i in range(24)]
+            ids = [fut.result() for fut in futs]
+        self.assertEqual(len(ids), len(set(ids)))
+        drained = payload(run_cli(self.home, "receive", "--name", "inbox", "--drain", "--timeout", "5"))
+        self.assertEqual(drained["count"], 24)
+
+    def test_pid_alive_does_not_terminate_self(self) -> None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import sesstalk
+
+        pid = os.getpid()
+        self.assertTrue(sesstalk.pid_alive(pid))
+        self.assertTrue(sesstalk.pid_alive(pid))
+        self.assertEqual(os.getpid(), pid)
+        self.assertFalse(sesstalk.pid_alive(999999))
 
     def test_stale_lock_from_dead_pid_is_cleared(self) -> None:
         qdir = self.home / "queues"

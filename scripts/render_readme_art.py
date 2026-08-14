@@ -219,7 +219,8 @@ def main() -> None:
         "flow.svg": flow_svg(),
     }
     for name, blob in files.items():
-        (dest / name).write_text(blob, encoding="utf-8", newline="\n")
+        with (dest / name).open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(blob)
         print(f"wrote {dest / name}", flush=True)
 
 
